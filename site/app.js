@@ -1,4 +1,5 @@
 {
+const APP_VERSION = '1.1';
 /* ===== Хранилище (для теста — в браузере; на Netlify заменить на Supabase/Firebase через Store.load/save) ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -218,7 +219,7 @@ function viewProfile() {
   <a class="row" href="https://instagram.com/${esc(c.instagram)}"><span class="f">Instagram</span><span class="muted r">@${esc(c.instagram)}</span></a>
   <a class="row" href="https://t.me/${esc(c.telegram)}"><span class="f">Telegram-канал</span><span class="muted r">@${esc(c.telegram)}</span></a></div>
   <h2>Покупателям</h2><div class="list"><div class="row"><span class="f">Доставка</span><span class="muted small r">Ozon и СДЭК, ПВЗ по всей России</span></div><div class="row"><span class="f">Оплата</span><span class="muted small r">По QR-коду через банк</span></div><div class="row"><span class="f">Удалённые регионы</span><span class="muted small r">Камчатка, Сахалин, Калининград, Крым — с доплатой</span></div></div>
-  <div style="margin-top:28px;text-align:center"><button class="btn sec" id="staffBtn">${staff ? 'Открыть панель сотрудника' : 'Вход для сотрудников'}</button></div>`;
+  <div style="margin-top:28px;text-align:center"><button class="btn sec" id="staffBtn">${staff ? 'Открыть панель сотрудника' : 'Вход для сотрудников'}</button><p class="small muted" style="margin-top:14px">Версия ${APP_VERSION}</p></div>`;
 }
 
 /* ===== Листы (bottom sheets) ===== */
