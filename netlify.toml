@@ -1,0 +1,3 @@
+# Netlify публикует только папку site — SQL-скрипт и README на сайт не попадают
+[build]
+  publish = "site"
