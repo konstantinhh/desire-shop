@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '1.3';
+const APP_VERSION = '1.4';
 /* ===== Хранилище (для теста — в браузере; на Netlify заменить на Supabase/Firebase через Store.load/save) ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -607,6 +607,8 @@ const UA = navigator.userAgent || '';
 const isIOS = /iPhone|iPad|iPod/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const isAndroid = /Android/i.test(UA);
 const inApp = /Instagram|FBAN|FBAV|FB_IAB/i.test(UA);
+const isYandex = /YaBrowser|YaSearchBrowser/i.test(UA);
+const isSamsung = /SamsungBrowser/i.test(UA);
 const standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
 let installEvt = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; if (route === 'home' || route === 'profile') render(); });
@@ -631,6 +633,7 @@ const KBD = {
   vdots: '<span class="kbd">⋮</span>',
   share: '<span class="kbd"><svg viewBox="0 0 24 24"><path d="M12 15V3M8 7l4-4 4 4"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg></span>',
   safari: '<span class="kbd" style="color:#1a7cf5"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z" fill="currentColor"/></svg></span>',
+  burger: '<span class="kbd">☰</span>',
   plus: '<span class="kbd"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8M8 12h8"/></svg></span>'
 };
 // Схема встроенного окна Instagram: значок Safari внизу справа
@@ -658,19 +661,23 @@ function openInstallGuide() {
     <li><div>В Safari нажмите ${KBD.share} <b>«Поделиться»</b>. На новых iPhone она спрятана в кнопке ${KBD.dots} внизу справа.</div></li>
     <li><div>Выберите ${KBD.plus} <b>«На экран „Домой“»</b> и нажмите <b>«Добавить»</b>. На экране появится иконка DESIRE.</div></li>`; }
   else if (inApp) { intro = `<div class="note" style="margin:10px 0 4px">Сейчас магазин открыт <b>во всплывающем окне Instagram</b> — это не браузер, из него иконку на экран не добавить. Сначала откройте магазин в браузере.</div>`;
-    steps = `<li><div>Нажмите кнопку ниже — магазин откроется в Chrome. Или нажмите ${KBD.vdots} справа вверху и выберите <b>«Открыть в Chrome»</b>.</div></li>
-    <li><div>Chrome предложит <b>«Установить приложение»</b>. Если не предложил — нажмите ${KBD.vdots} и выберите <b>«Добавить на главный экран»</b>.</div></li>`;
-    extra = `<a class="btn w" style="margin-top:14px" href="intent://${location.host}/#Intent;scheme=https;package=com.android.chrome;end">Открыть в Chrome</a>`; }
+    steps = `<li><div>Нажмите кнопку <b>«Открыть в браузере»</b> ниже — магазин откроется в вашем обычном браузере (Chrome, Яндекс, Samsung — какой стоит на телефоне). Если телефон спросит, чем открыть, выберите любой браузер.<br><span class="small muted">Или нажмите ${KBD.vdots} <b>вверху справа</b> → «Открыть в браузере» / «Открыть в Chrome».</span></div></li>
+    <li><div>В браузере появится предложение <b>«Установить приложение»</b>. Если его нет — откройте меню браузера (${KBD.vdots} или ${KBD.burger}) и выберите <b>«Установить приложение»</b> или <b>«Добавить на главный экран»</b>.</div></li>`;
+    extra = `<a class="btn w" style="margin-top:14px" href="intent://${location.host}/#Intent;scheme=https;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end">Открыть в браузере</a>`; }
   else if (isIOS) steps = `<li><div>Нажмите ${KBD.share} <b>«Поделиться»</b> внизу экрана. На новых iPhone она спрятана в кнопке ${KBD.dots} внизу справа.</div></li>
     <li><div>Пролистайте вниз и выберите ${KBD.plus} <b>«На экран „Домой“»</b>.</div></li>
     <li><div>Нажмите <b>«Добавить»</b> — на экране появится иконка DESIRE.</div></li>`;
+  else if (isYandex) steps = `<li><div>Нажмите ${KBD.vdots} <b>в нижней панели Яндекс Браузера</b> (справа от адресной строки).</div></li>
+    <li><div>Выберите <b>«Добавить ярлык»</b> или <b>«Установить приложение»</b>. Если такого пункта нет в первом экране меню — пролистайте его вправо или вниз.</div></li>`;
+  else if (isSamsung) steps = `<li><div>Если в адресной строке есть значок установки (стрелка вниз), нажмите его. Иначе нажмите ${KBD.burger} <b>внизу справа</b>.</div></li>
+    <li><div>Выберите <b>«Добавить страницу на»</b> → <b>«Главный экран»</b>.</div></li>`;
   else steps = `<li><div>Нажмите ${KBD.vdots} в правом верхнем углу Chrome.</div></li>
     <li><div>Выберите <b>«Установить приложение»</b> или <b>«Добавить на главный экран»</b>.</div></li>
     <li><div>Подтвердите — на экране появится иконка DESIRE.</div></li>`;
   sheet('Установка на телефон', `<div class="sh-b"><div class="inst" style="margin-top:4px"><img src="icon-192.png" alt=""><div class="f"><b>DESIRE</b><span>${esc(location.host)}</span></div></div>
     ${intro}<ol class="steps">${steps}</ol>${extra}
     <button class="btn w sec" style="margin-top:12px" data-inst="copy">Скопировать ссылку на магазин</button>
-    <p class="small muted">Если кнопки не находятся — скопируйте ссылку и вставьте её в адресную строку Safari или Chrome.</p></div>`);
+    <p class="small muted">Если кнопки не находятся — скопируйте ссылку и вставьте её в адресную строку браузера.</p></div>`);
 }
 async function installAction(a) {
   if (a === 'guide') return openInstallGuide();
