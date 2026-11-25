@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '1.4';
+const APP_VERSION = '1.5';
 /* ===== Хранилище (для теста — в браузере; на Netlify заменить на Supabase/Firebase через Store.load/save) ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -10,6 +10,11 @@ const ls = {
 const clone = o => JSON.parse(JSON.stringify(o));
 let DB = ls.get(KEY);
 if (!DB || DB.v !== SEED.v) DB = clone(SEED);
+// Новые настройки подставляются из исходных, если в сохранённых их ещё нет
+const isObj = o => o && typeof o === 'object' && !Array.isArray(o);
+function withDefaults(cur, def) { const out = isObj(cur) ? { ...cur } : {}; for (const k in def) { if (isObj(def[k])) out[k] = withDefaults(out[k], def[k]); else if (out[k] === undefined) out[k] = def[k]; } return out; }
+DB.settings = withDefaults(DB.settings, SEED.settings); if (!DB.reviews) DB.reviews = [];
+let reviewsOn = true, bonusOn = true, bonusBal = 0;
 let cart = ls.get(CK) || [], favs = ls.get(FK) || [], myOrders = ls.get(MK) || [];
 let staff = false;
 /* ===== Общая база Supabase. Если config.js пустой — всё хранится локально в браузере ===== */
@@ -17,11 +22,11 @@ const CFG = window.DESIRE_CONFIG || {};
 const SB = CFG.supabaseUrl && CFG.supabaseKey && window.supabase ? window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey) : null;
 let loading = !!SB, loadErr = '', myRemote = [], synced = null, syncT;
 let myTokens = ls.get('desire_tokens_v1') || [];
-if (SB) DB = { v: SEED.v, products: [], categories: SEED.categories, promos: [], campaigns: [], orders: [], settings: clone(SEED.settings) };
+if (SB) DB = { v: SEED.v, products: [], categories: SEED.categories, promos: [], campaigns: [], orders: [], reviews: [], settings: clone(SEED.settings) };
 const pubSettings = () => { const s = clone(DB.settings); delete s.pin; return s; };
 const mapJson = arr => Object.fromEntries(arr.map(x => [x.id, JSON.stringify(x)]));
 const snapOf = () => ({ products: mapJson(DB.products), promos: mapJson(DB.promos), campaigns: mapJson(DB.campaigns), settings: JSON.stringify(pubSettings()), orders: Object.fromEntries(DB.orders.map(o => [o.id, o.status])) });
-const rowToOrder = r => ({ ...r.data, id: r.id, status: r.status, paidClaimed: r.paid_claimed, date: r.data.date || Date.parse(r.created_at) });
+const rowToOrder = r => ({ ...r.data, id: r.id, status: r.status, paidClaimed: r.paid_claimed, date: r.data.date || Date.parse(r.created_at), bonusSpent: r.bonus_spent ?? r.data.bonusSpent ?? 0, bonusEarned: r.bonus_earned ?? 0 });
 const seedIdx = id => SEED.products.findIndex(p => p.id === id);
 async function loadRemote(withOrders) {
   const q = t => SB.from(t).select('id,data');
@@ -29,9 +34,17 @@ async function loadRemote(withOrders) {
   const err = p.error || pr.error || c.error || s.error; if (err) throw err;
   DB.products = p.data.map(r => r.data).sort((a, b) => seedIdx(a.id) - seedIdx(b.id));
   DB.promos = pr.data.map(r => r.data); DB.campaigns = c.data.map(r => r.data);
-  if (s.data) DB.settings = { ...clone(SEED.settings), ...s.data.data };
-  if (withOrders) { const o = await SB.from('orders').select('id,data,status,paid_claimed,created_at').order('created_at', { ascending: true }); if (o.error) throw o.error; DB.orders = o.data.map(rowToOrder); }
+  if (s.data) DB.settings = withDefaults(s.data.data, SEED.settings);
+  const rv = await SB.from('reviews').select('id,pid,data,status,created_at').order('created_at', { ascending: false });
+  if (rv.error) { reviewsOn = false; DB.reviews = []; } else { reviewsOn = true; DB.reviews = rv.data.map(r => ({ ...r.data, id: r.id, pid: r.pid, status: r.status })); }
+  if (withOrders) { const o = await SB.from('orders').select('*').order('created_at', { ascending: true }); if (o.error) throw o.error; DB.orders = o.data.map(rowToOrder); }
   synced = snapOf();
+}
+async function loadBonus() {
+  if (!SB) { bonusBal = DB.orders.filter(o => myOrders.includes(o.id)).reduce((a, o) => a + (o.status === 'done' ? o.bonusEarned || 0 : 0) - (o.status !== 'cancelled' ? o.bonusSpent || 0 : 0), 0); return; }
+  if (!myTokens.length) { bonusBal = 0; return; }
+  const { data, error } = await SB.rpc('my_bonus', { p_tokens: myTokens.map(t => t.token) });
+  if (error) { bonusOn = false; bonusBal = 0; } else { bonusOn = true; bonusBal = Math.max(0, +data || 0); }
 }
 async function loadMine() {
   if (!myTokens.length) return;
@@ -82,7 +95,9 @@ const IC = {
   cart: '<path d="M5 7h14l-1.2 11.2a2 2 0 0 1-2 1.8H8.2a2 2 0 0 1-2-1.8z"/><path d="M9 7a3 3 0 0 1 6 0"/>',
   profile: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   heart: '<path d="M12 20s-7.5-4.6-9.3-9.2C1.5 7.6 3.6 4.5 6.8 4.5c2.1 0 3.6 1.2 5.2 3 1.6-1.8 3.1-3 5.2-3 3.2 0 5.3 3.1 4.1 6.3C19.5 15.4 12 20 12 20z"/>',
-  close: '<path d="M6 6l12 12M18 6 6 18"/>'
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  chat: '<path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4V6a1 1 0 0 1 1-1z"/><path d="M8 10h8M8 13h5"/>',
+  star: '<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z"/>'
 };
 const svg = (n, cls = '') => `<svg viewBox="0 0 24 24" class="${cls}">${IC[n]}</svg>`;
 
@@ -139,7 +154,7 @@ function renderTabs() {
   $('#tabs').innerHTML = TABS.map(([k, t]) => `<button class="tab ${route === k || (route === 'admin' && k === 'profile') ? 'on' : ''}" data-go="${k}" aria-label="${t}">${svg(k)}${t}${k === 'cart' && n ? `<span class="cnt">${n}</span>` : ''}${k === 'favorites' && favs.length ? `<span class="cnt">${favs.length}</span>` : ''}</button>`).join('');
 }
 function go(r) {
-  if (SB && r === 'profile' && myTokens.length) loadMine().then(() => route === 'profile' && render());
+  if (r === 'profile') Promise.all([SB && myTokens.length ? loadMine() : null, loadBonus()]).then(() => route === 'profile' && render());
   if (SB && r === 'admin' && staff) loadRemote(true).then(() => route === 'admin' && render()).catch(() => toast('Не удалось обновить данные'));
   route = r; if (location.hash.slice(1) !== r) history.replaceState(null, '', '#' + r); render(); window.scrollTo({ top: 0 }); }
 function render() {
@@ -151,12 +166,53 @@ function render() {
   if (route === 'admin') bindAdmin(); else v.onclick = v.oninput = v.onchange = null;
 }
 
+/* ===== Отзывы, рейтинг ===== */
+const pubReviews = pid => DB.reviews.filter(r => r.pid === pid && r.status === 'published');
+function ratingOf(pid) { const l = pubReviews(pid); return l.length ? { avg: l.reduce((a, r) => a + r.rating, 0) / l.length, n: l.length } : null; }
+const stars = (v, size = 14) => `<span class="stars" style="--s:${size}px" aria-label="Оценка ${v} из 5">${[1, 2, 3, 4, 5].map(i => `<svg viewBox="0 0 24 24" class="${i <= Math.round(v) ? 'on' : ''}">${IC.star}</svg>`).join('')}</span>`;
+/* ===== Уход за вещью: если сотрудник не заполнил — подсказка по составу ===== */
+function defaultCare(p) {
+  const c = ((p.comp || '') + ' ' + (p.desc || '')).toLowerCase();
+  if (/шерст|мохер|ангор/.test(c)) return 'Ручная стирка или режим «шерсть» при 30 °C. Не отжимать в центрифуге, сушить в расправленном виде на горизонтальной поверхности. Не гладить — отпаривать.';
+  if (/лён|лен,|лиоцелл|вискоз|тенсел/.test(c)) return 'Деликатная стирка при 30 °C, вывернув наизнанку. Отжим на низких оборотах. Гладить слегка влажной, средняя температура утюга.';
+  if (/начёс|начес|плюш|утепл/.test(c)) return 'Стирка при 30 °C наизнанку, деликатный режим, жидким средством. Сушить в расправленном виде, не в сушильной машине. На начёсе со временем могут появляться небольшие катышки — это особенность ткани.';
+  if (/полиэстер/.test(c) && !/хлоп/.test(c)) return 'Деликатная стирка при 30 °C, застегнув молнии. Не отбеливать. Гладить на низкой температуре через ткань.';
+  return 'Стирка при 30 °C наизнанку, деликатный режим. Не отбеливать. Сушить в расправленном виде. Принт и вышивку гладить с изнанки.';
+}
+const careOf = p => (p.care || '').trim() || defaultCare(p);
+/* ===== Связь с менеджером ===== */
+const waLink = text => `https://wa.me/${(DB.settings.contacts.whatsapp || '').replace(/\D/g, '')}${text ? '?text=' + encodeURIComponent(text) : ''}`;
+const tgLink = u => `https://t.me/${String(u || '').replace(/^@|^https?:\/\/t\.me\//g, '')}`;
+function openContact(text) {
+  const c = DB.settings.contacts;
+  sheet('Написать нам', `<div class="sh-b"><p class="muted" style="margin-top:4px">Ответим на вопросы о размере, наличии и заказе.</p>
+    ${c.managerTg ? `<a class="btn w" href="${esc(tgLink(c.managerTg))}" style="margin-top:6px;background:#229ED9;color:#fff">Написать в Telegram</a>` : ''}
+    ${c.whatsapp ? `<a class="btn w" href="${esc(waLink(text))}" style="margin-top:10px;background:#25D366;color:#fff">Написать в WhatsApp</a>` : ''}
+    ${text ? `<p class="small muted">В WhatsApp вопрос подставится сам. В Telegram напишите: «${esc(text)}»</p>` : ''}
+    <div class="list" style="margin-top:14px">${c.group ? `<a class="row" href="${esc(tgLink(c.group))}"><span class="f">Telegram-группа</span><span class="muted r">общение и вопросы</span></a>` : ''}
+    <a class="row" href="${esc(tgLink(c.telegram))}"><span class="f">Telegram-канал</span><span class="muted r">новинки и акции</span></a>
+    <a class="row" href="https://instagram.com/${esc(c.instagram)}"><span class="f">Instagram</span><span class="muted r">@${esc(c.instagram)}</span></a></div>
+    <p class="small muted">Telegram: @${esc(String(c.managerTg || '').replace(/^@/, ''))} · WhatsApp: +${esc((c.whatsapp || '').replace(/\D/g, ''))}</p></div>`);
+}
+/* ===== Возврат и обмен ===== */
+function openReturns() {
+  const r = DB.settings.returns, c = DB.settings.contacts;
+  sheet('Возврат и обмен', `<div class="sh-b">
+    <div class="note" style="margin-top:4px"><b>7 дней на возврат</b> — с момента получения заказа. Касается всех вещей, в том числе купленных по акции.</div>
+    <h3 style="margin-top:16px">Условия</h3>
+    <ul class="ul"><li>Вещь не носили, сохранены товарный вид, бирки и ярлыки.</li><li>Обратную доставку оплачивает покупатель.</li><li>Деньги за товар вернём в течение 10 дней после получения заявления — тем же способом, которым вы платили.</li><li>Если вещь с браком — обменяем или вернём деньги, доставку в этом случае оплачиваем мы.</li></ul>
+    <h3 style="margin-top:16px">Как вернуть</h3>
+    <ol class="steps"><li><div>Напишите нам в Telegram или WhatsApp: номер заказа и какую вещь возвращаете. Пришлём адрес для отправки.</div></li><li><div>Упакуйте вещь и вложите заявление в свободной форме: ФИО, номер заказа, причина, куда вернуть деньги.</div></li><li><div>Отправьте через <b>СДЭК</b> или <b>Почту России</b> и пришлите нам трек-номер.</div></li></ol>
+    ${r.extOn ? `<div class="box" style="margin-top:14px"><h3>Возврат без забот · ${rub(r.extPrice)}</h3><p class="small muted" style="margin:0">Можно добавить при оформлении заказа: <b>${r.extDays} дней</b> на возврат вместо 7, и <b>обратную доставку оплачиваем мы</b>. Действует на все вещи в заказе, включая акционные.</p></div>` : ''}
+    <button class="btn w sec" style="margin-top:14px" data-contact="Здравствуйте! Хочу оформить возврат по заказу №">Написать про возврат</button></div>`);
+}
+
 /* ===== Карточка товара в сетке ===== */
 const cardHtml = p => {
   const o = oldOf(p), st = totalStock(p);
   return `<div class="card"><button data-open="${esc(p.id)}" aria-label="${esc(p.name)}"><div class="im"><img loading="lazy" src="${esc(coverOf(p))}" alt=""></div>
   ${!st ? '<span class="badge">Нет в наличии</span>' : o ? `<span class="badge r">−${Math.round((1 - priceOf(p) / o) * 100)}%</span>` : p.isNew ? '<span class="badge">Новинка</span>' : ''}
-  <div class="b"><span class="n">${esc(p.name)}</span><span class="c">${esc(p.cat)}</span><span>${priceHtml(p)}</span>
+  <div class="b"><span class="n">${esc(p.name)}</span><span class="c">${esc(p.cat)}${(r => r ? ` · <span class="rt">★ ${r.avg.toFixed(1)} <i>(${r.n})</i></span>` : '')(ratingOf(p.id))}</span><span>${priceHtml(p)}</span>
   <span class="dots">${p.colors.slice(0, 7).map(c => `<i class="dot" style="background:${colorCss(c)}"></i>`).join('')}</span></div></button>
   <button class="fav ${favs.includes(p.id) ? 'on' : ''}" data-fav="${esc(p.id)}" aria-label="В избранное">${svg('heart')}</button></div>`;
 };
@@ -173,10 +229,15 @@ function viewHome() {
   <h2>Категории</h2><div class="chips">${DB.categories.map(c => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
   ${sale.length ? `<h2>Скидки</h2><div class="grid">${sale.map(cardHtml).join('')}</div>` : ''}
   <h2>Костюмы и новинки</h2><div class="grid">${news.map(cardHtml).join('')}</div>
+  <section class="about"><div class="ab-tx"><span class="muted small">О нас</span><h2 style="margin:6px 0 10px">DESIRE — 13 лет с вами</h2>
+  <p>Мы начинали в Иркутске и уже 13 лет одеваем девушек, которые любят удобную и красивую одежду на каждый день. Костюмы шьём сами — на собственном производстве, небольшими партиями.</p>
+</div>
+  <div class="ab-st"><div><b>13</b><span>лет с иркутской аудиторией</span></div><div><b>Свой</b><span>пошив костюмов</span></div><div><b>РФ</b><span>доставка в ПВЗ Ozon и СДЭК</span></div></div></section>
   <h2>Как мы работаем</h2><div class="stack3">
   <div class="box"><h3>Доставка в ПВЗ</h3><p class="muted small" style="margin:0">Ozon или СДЭК. Стоимость считается автоматически по городу. От ${DB.settings.freeFromItems} шт. — бесплатно.</p></div>
   <div class="box"><h3>Оплата по QR</h3><p class="muted small" style="margin:0">Сканируйте код в приложении любого банка — сумма подставится сама.</p></div>
-  <div class="box"><h3>Помощь с размером</h3><p class="muted small" style="margin:0">Пишите в Instagram @${esc(DB.settings.contacts.instagram)} — подскажем по посадке.</p></div></div>`;
+  <div class="box"><h3>Помощь с размером</h3><p class="muted small" style="margin:0">Напишите нам — подскажем по посадке.</p><button class="btn sm sec" style="margin-top:10px" data-contact="">Написать</button></div>
+  <div class="box"><h3>Возврат 7 дней</h3><p class="muted small" style="margin:0">На все вещи, в том числе по акции.</p><button class="btn sm sec" style="margin-top:10px" data-returns="1">Условия</button></div></div>`;
 }
 function viewCatalog() {
   let list = visible();
@@ -213,12 +274,18 @@ const STATUS = { awaiting: 'Ждёт подтверждения оплаты', p
 function viewProfile() {
   const mine = SB ? myRemote : DB.orders.filter(o => myOrders.includes(o.id)).reverse();
   const c = DB.settings.contacts;
-  return `<h1>Профиль</h1>${installBanner(true)}<h2>Мои заказы</h2>
+  const b = DB.settings.bonus;
+  return `<h1>Профиль</h1>${installBanner(true)}
+  ${bonusOn && b.on ? `<div class="bonus"><div><span class="small">Бонусы DESIRE</span><b>${rub(bonusBal)}</b></div><p class="small">${b.earnPct}% от суммы заказа возвращаются бонусами после получения. Бонусами можно оплатить до ${b.maxSpendPct}% следующего заказа. Бонусы хранятся в приложении на этом телефоне.</p></div>` : ''}
+  <h2>Мои заказы</h2>
   ${mine.length ? `<div class="list">${mine.map(o => `<button class="row" style="width:100%;text-align:left" data-order="${esc(o.id)}"><div class="f"><b>Заказ ${esc(o.id)}</b><div class="muted small">${new Date(o.date).toLocaleDateString('ru-RU')} · ${o.items.reduce((a, i) => a + i.qty, 0)} шт. · ${esc(o.delivery.service === 'ozon' ? 'Ozon' : 'СДЭК')}</div><span class="st ${o.status}" style="margin-top:6px">${STATUS[o.status]}</span></div><span class="price">${rub(o.total)}</span></button>`).join('')}</div>` : '<p class="muted">Здесь появятся ваши заказы.</p>'}
-  <h2>Связаться с нами</h2><div class="list">
-  <a class="row" href="https://instagram.com/${esc(c.instagram)}"><span class="f">Instagram</span><span class="muted r">@${esc(c.instagram)}</span></a>
-  <a class="row" href="https://t.me/${esc(c.telegram)}"><span class="f">Telegram-канал</span><span class="muted r">@${esc(c.telegram)}</span></a></div>
-  <h2>Покупателям</h2><div class="list"><div class="row"><span class="f">Доставка</span><span class="muted small r">Ozon и СДЭК, ПВЗ по всей России</span></div><div class="row"><span class="f">Оплата</span><span class="muted small r">По QR-коду через банк</span></div><div class="row"><span class="f">Удалённые регионы</span><span class="muted small r">Камчатка, Сахалин, Калининград, Крым — с доплатой</span></div></div>
+  <h2>Связаться с нами</h2><div class="two" style="margin-bottom:10px">${c.managerTg ? `<a class="btn" href="${esc(tgLink(c.managerTg))}" style="background:#229ED9;color:#fff">Telegram</a>` : ''}${c.whatsapp ? `<a class="btn" href="${esc(waLink(''))}" style="background:#25D366;color:#fff">WhatsApp</a>` : ''}</div>
+  <div class="list">
+  ${c.group ? `<a class="row" href="${esc(tgLink(c.group))}"><span class="f">Telegram-группа</span><span class="muted r">общение и вопросы</span></a>` : ''}
+  <a class="row" href="${esc(tgLink(c.telegram))}"><span class="f">Telegram-канал</span><span class="muted r">новинки и акции</span></a>
+  <a class="row" href="https://instagram.com/${esc(c.instagram)}"><span class="f">Instagram</span><span class="muted r">@${esc(c.instagram)}</span></a></div>
+  <h2>Новинки и акции</h2><div class="list"><a class="row" href="${esc(tgLink(c.telegram))}"><span class="f">Подписаться в Telegram</span><span class="muted r">первыми узнавайте о новинках</span></a><div class="row"><span class="f">Уведомления в приложении</span><span class="muted small r">скоро</span></div></div>
+  <h2>Покупателям</h2><div class="list"><div class="row"><span class="f">Доставка</span><span class="muted small r">Ozon и СДЭК, ПВЗ по всей России</span></div><div class="row"><span class="f">Оплата</span><span class="muted small r">По QR-коду через банк</span></div><div class="row"><span class="f">Удалённые регионы</span><span class="muted small r">Камчатка, Сахалин, Калининград, Крым — с доплатой</span></div><button class="row" style="width:100%;text-align:left" data-returns="1"><span class="f">Возврат и обмен</span><span class="muted small r">7 дней, условия ›</span></button></div>
   <div style="margin-top:28px;text-align:center"><button class="btn sec" id="staffBtn">${staff ? 'Открыть панель сотрудника' : 'Вход для сотрудников'}</button><p class="small muted" style="margin-top:14px">Версия ${APP_VERSION}</p></div>`;
 }
 
@@ -248,6 +315,7 @@ function openProduct(id) {
       api.set(`<div class="gal" id="gal">${photos.map(f => `<img src="${esc(f.src)}" alt="${esc(p.name + ' ' + f.color)}">`).join('')}</div>
       <div class="sh-b"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-top:16px"><h1 style="margin:0;font-size:30px">${esc(p.name)}</h1><span style="font-size:22px">${priceHtml(p)}</span></div>
       <p class="muted small" style="margin:4px 0 0">${esc(p.cat)}${p.tag ? ' · ' + esc(p.tag) : ''}${campaignFor(p) ? ' · ' + esc(campaignFor(p).title) : ''}</p>
+      ${(r => r ? `<button class="rlink" data-goreviews="1">${stars(r.avg)} <b>${r.avg.toFixed(1)}</b> <span class="muted">· ${r.n} ${plural(r.n, 'отзыв', 'отзыва', 'отзывов')}</span></button>` : '')(ratingOf(p.id))}
       <h3 style="margin-top:18px">Цвет: <span class="muted">${esc(color)}</span></h3>
       <div class="sw">${p.colors.map(c => { const has = p.sizes.some(s => stockOf(p, c, s) > 0); return `<button class="swb ${c === color ? 'on' : ''}" data-color="${esc(c)}" ${has ? '' : 'disabled'}><i style="background:${colorCss(c)}"></i>${esc(c)}</button>`; }).join('')}</div>
       <h3 style="margin-top:16px">Размер</h3><div class="sw">${p.sizes.map(s => `<button class="swb ${s === size ? 'on' : ''}" data-size="${esc(s)}" style="padding-left:14px" ${stockOf(p, color, s) ? '' : 'disabled'}>${esc(s)}</button>`).join('')}</div>
@@ -256,8 +324,12 @@ function openProduct(id) {
       <button class="btn" style="flex:1" id="add" ${st ? '' : 'disabled'}>В корзину</button>
       <button class="icon fav ${favs.includes(p.id) ? 'on' : ''}" style="position:static;background:var(--fill);width:50px;height:50px;border-radius:14px" data-fav="${esc(p.id)}" aria-label="В избранное">${svg('heart')}</button></div>
       ${p.freeShip ? '<div class="note">Доставка этой модели — бесплатно</div>' : ''}
+      <button class="btn sec w sm" style="margin-top:10px" data-contact="${esc(`Здравствуйте! Подскажите по размеру: ${p.name}, цвет ${color}.`)}">${svg('chat')} Спросить про размер</button>
       <h3 style="margin-top:18px">Описание</h3><p style="margin:0 0 10px">${esc(p.desc)}</p>
       <div class="list"><div class="row"><span class="f muted">Состав</span><span class="r">${esc(p.comp)}</span></div><div class="row"><span class="f muted">Размер</span><span class="r">${esc(p.sizes.join(', '))}</span></div><div class="row"><span class="f muted">Замеры</span><span class="r">${esc(p.specs)}</span></div></div>
+      <h3 style="margin-top:18px">Уход</h3><p style="margin:0 0 10px">${esc(careOf(p))}</p>
+      <p class="small muted" style="margin:0 0 10px">Возврат 7 дней — <button class="lnk" data-returns="1">условия</button></p>
+      ${reviewsHtml(p)}
       ${similar(p)}</div>`);
     };
     draw();
@@ -269,9 +341,21 @@ function openProduct(id) {
       else if (t.id === 'add') { if (addToCart(p.id, color, size, qty)) { toast(`${p.name} · ${color} — в корзине`); } }
       else if (t.dataset.fav) { toggleFav(p.id); draw(); }
       else if (t.dataset.open) { api.close(); setTimeout(() => openProduct(t.dataset.open), 320); }
+      else if (t.dataset.goreviews) api.el.querySelector('#reviews')?.scrollIntoView({ behavior: 'smooth' });
+      else if (t.dataset.photo) openPhoto(t.dataset.photo);
     });
   });
 }
+function reviewsHtml(p) {
+  if (!reviewsOn) return '';
+  const l = pubReviews(p.id), r = ratingOf(p.id);
+  return `<h3 id="reviews" style="margin-top:20px">Отзывы${r ? ` <span class="muted">· ${r.avg.toFixed(1)} из 5</span>` : ''}</h3>
+  ${l.length ? l.slice(0, 20).map(v => `<div class="rev"><div class="rh"><b>${esc(v.name || 'Покупатель')}</b>${stars(v.rating, 13)}<span class="muted small">${new Date(v.date).toLocaleDateString('ru-RU')}</span></div>
+    ${v.color || v.size ? `<div class="small muted">${esc([v.color, v.size].filter(Boolean).join(' · '))}</div>` : ''}${v.text ? `<p>${esc(v.text)}</p>` : ''}
+    ${(v.photos || []).length ? `<div class="rph">${v.photos.map(src => /^data:image\/jpeg;base64,/.test(src) ? `<button data-photo="${esc(src)}"><img src="${esc(src)}" alt="Фото покупателя"></button>` : '').join('')}</div>` : ''}</div>`).join('')
+    : '<p class="muted small">Пока нет отзывов. Оставить отзыв можно после получения заказа — в Профиле → Мои заказы.</p>'}`;
+}
+function openPhoto(src) { sheet('Фото покупателя', `<div class="sh-b"><img src="${esc(src)}" alt="" style="width:100%;border-radius:16px"></div>`); }
 const similar = p => { const l = visible().filter(x => x.cat === p.cat && x.id !== p.id).slice(0, 4); return l.length ? `<h2>Из этой категории</h2><div class="grid">${l.map(cardHtml).join('')}</div>` : ''; };
 function toggleFav(id) { favs = favs.includes(id) ? favs.filter(x => x !== id) : [...favs, id]; ls.set(FK, favs); toast(favs.includes(id) ? 'Добавлено в избранное' : 'Убрано из избранного'); renderTabs(); if (route === 'favorites' || route === 'home' || route === 'catalog') render(); }
 
@@ -291,8 +375,15 @@ function fmtPhone(v) {
 const phoneOk = p => String(p || '').replace(/\D/g, '').length === 11;
 function openCheckout() {
   const f = ls.get('desire_form') || { name: '', phone: '', email: '', service: 'ozon', city: '', address: '', comment: '' };
+  f.useBonus = false; f.returnCare = false;
   sheet('Оформление', '', api => {
     const calc = () => delivery(f.service, f.city, cartItems());
+    const R = DB.settings.returns, B = DB.settings.bonus;
+    const bonusMax = () => bonusOn && B.on ? Math.max(0, Math.min(bonusBal, Math.floor((subtotal() - promoDiscount(subtotal())) * B.maxSpendPct / 100))) : 0;
+    const bonusUse = () => f.useBonus ? bonusMax() : 0;
+    const careFee = () => R.extOn && f.returnCare ? +R.extPrice || 0 : 0;
+    const xtraHtml = () => `${R.extOn ? `<label class="opt"><input type="checkbox" id="xc" ${f.returnCare ? 'checked' : ''}><span><b>Возврат без забот · ${rub(R.extPrice)}</b><br><span class="small muted">${R.extDays} дней на возврат вместо 7, обратную доставку оплачиваем мы. Для всех вещей в заказе, включая акционные.</span></span></label>` : ''}
+      ${bonusMax() ? `<label class="opt"><input type="checkbox" id="xb" ${f.useBonus ? 'checked' : ''}><span><b>Списать ${rub(bonusMax())} бонусами</b><br><span class="small muted">На счёте ${rub(bonusBal)}, можно оплатить до ${B.maxSpendPct}% заказа</span></span></label>` : ''}`;
     const draw = () => {
       const sub = subtotal(), disc = promoDiscount(sub), d = calc();
       api.set(`<div class="sh-b"><h2 style="margin-top:6px">Получатель</h2>
@@ -305,17 +396,22 @@ function openCheckout() {
       <div class="field"><label for="fa">Адрес пункта выдачи ${f.service === 'ozon' ? 'Ozon' : 'СДЭК'}</label><input class="inp" id="fa" placeholder="Улица, дом — как в приложении ${f.service === 'ozon' ? 'Ozon' : 'СДЭК'}" value="${esc(f.address)}"></div>
       <div id="dl">${dlHtml(d)}</div>
       <div class="field"><label for="fm">Комментарий</label><textarea class="inp" id="fm" placeholder="Например, нужна помощь с размером">${esc(f.comment)}</textarea></div>
+      <div id="xtra">${xtraHtml()}</div>
       <div class="box" id="tot">${totHtml(sub, disc, d)}</div>
       <button class="btn w blue" id="pay" style="margin-top:14px" ${d && f.address.trim().length > 4 && f.name.trim() && phoneOk(f.phone) ? '' : 'disabled'}>Оплатить по QR-коду</button>
-      <p class="muted small" style="text-align:center">Заполните имя, телефон, город и адрес ПВЗ</p></div>`);
+      <p class="muted small" style="text-align:center">Заполните имя, телефон, город и адрес ПВЗ. Оформляя заказ, вы соглашаетесь с <button class="lnk" data-returns="1">условиями возврата</button>.</p></div>`);
     };
     const dlHtml = d => !f.city ? '' : d ? `<div class="note" style="margin-bottom:12px"><b>${d.cost ? rub(d.cost) : 'Бесплатно'}</b>${d.free ? ` <span class="muted">(${esc(d.free)}, обычно ${rub(d.full)})</span>` : ''} · ${d.days[0]}–${d.days[1]} дн. · ~${d.dist.toLocaleString('ru-RU')} км от склада${d.remote ? '<br>Удалённый регион — включена доплата' : ''}</div>` : `<div class="note" style="margin-bottom:12px">Выберите город из подсказок — так мы рассчитаем доставку</div>`;
-    const totHtml = (sub, disc, d) => `<div class="sum"><span>Товары</span><span>${rub(sub)}</span></div>${disc ? `<div class="sum sale"><span>Промокод</span><span>−${rub(disc)}</span></div>` : ''}<div class="sum"><span>Доставка</span><span>${d ? (d.cost ? rub(d.cost) : 'Бесплатно') : '—'}</span></div><div class="sum t"><span>К оплате</span><span>${rub(sub - disc + (d ? d.cost : 0))}</span></div>`;
-    const refresh = () => { const d = calc(); $('#dl').innerHTML = dlHtml(d); $('#tot').innerHTML = totHtml(subtotal(), promoDiscount(subtotal()), d); $('#pay').disabled = !(d && f.address.trim().length > 4 && f.name.trim() && phoneOk(f.phone)); ls.set('desire_form', f); };
+    const totHtml = (sub, disc, d) => { const bu = bonusUse(), cf = careFee(), goods = sub - disc - bu; const earn = bonusOn && B.on ? Math.floor(goods * B.earnPct / 100) : 0;
+      return `<div class="sum"><span>Товары</span><span>${rub(sub)}</span></div>${disc ? `<div class="sum sale"><span>Промокод</span><span>−${rub(disc)}</span></div>` : ''}${bu ? `<div class="sum sale"><span>Бонусы</span><span>−${rub(bu)}</span></div>` : ''}${cf ? `<div class="sum"><span>Возврат без забот</span><span>${rub(cf)}</span></div>` : ''}<div class="sum"><span>Доставка</span><span>${d ? (d.cost ? rub(d.cost) : 'Бесплатно') : '—'}</span></div><div class="sum t"><span>К оплате</span><span>${rub(goods + cf + (d ? d.cost : 0))}</span></div>${earn ? `<p class="small" style="margin:8px 0 0;color:var(--green)">+${rub(earn)} бонусами после получения заказа</p>` : ''}`; };
+    const refresh = () => { if (!$('#tot')) return; const d = calc(); $('#dl').innerHTML = dlHtml(d); $('#tot').innerHTML = totHtml(subtotal(), promoDiscount(subtotal()), d); $('#pay').disabled = !(d && f.address.trim().length > 4 && f.name.trim() && phoneOk(f.phone)); ls.set('desire_form', f); };
     draw();
+    loadBonus().then(() => { if (api.el.querySelector('#xtra')) { api.el.querySelector('#xtra').innerHTML = xtraHtml(); refresh(); } });
+    api.el.addEventListener('focusin', e => { if (e.target.id === 'fp') setTimeout(() => { const L = e.target.value.length; try { e.target.setSelectionRange(L, L); } catch {} }); });
     api.el.addEventListener('input', e => {
       const id = e.target.id, v = e.target.value;
-      if (id === 'fn') f.name = v; if (id === 'fp') { f.phone = fmtPhone(v); e.target.value = f.phone; } if (id === 'fe') f.email = v; if (id === 'fa') f.address = v; if (id === 'fm') f.comment = v;
+      if (id === 'xc') f.returnCare = e.target.checked; if (id === 'xb') f.useBonus = e.target.checked;
+      if (id === 'fn') f.name = v; if (id === 'fp') { let pv = v; const k = pv.indexOf('+7'); if (k > 0) pv = '+7 ' + pv.slice(0, k) + pv.slice(k + 2); f.phone = fmtPhone(pv); e.target.value = f.phone; const L = f.phone.length; try { e.target.setSelectionRange(L, L); } catch {} } if (id === 'fe') f.email = v; if (id === 'fa') f.address = v; if (id === 'fm') f.comment = v;
       if (id === 'fc') {
         f.city = v; const q = v.trim().toLowerCase();
         const s = q ? CITIES.filter(c => c.n.toLowerCase().startsWith(q)).slice(0, 7) : [];
@@ -327,24 +423,25 @@ function openCheckout() {
       const t = e.target.closest('button'); if (!t) return;
       if (t.dataset.svc) { f.service = t.dataset.svc; draw(); refresh(); }
       if (t.dataset.city) { f.city = t.dataset.city; $('#fc').value = f.city; $('#sug').innerHTML = ''; refresh(); $('#fa').focus(); }
-      if (t.id === 'pay') { t.disabled = true; t.textContent = 'Оформляем…'; const o = await createOrder(f, calc()); if (o) { api.close(); setTimeout(() => openPay(o), 320); } else { t.disabled = false; t.textContent = 'Оплатить по QR-коду'; } }
+      if (t.id === 'pay') { t.disabled = true; t.textContent = 'Оформляем…'; const o = await createOrder(f, calc(), bonusUse(), careFee()); if (o) { api.close(); setTimeout(() => openPay(o), 320); } else { t.disabled = false; t.textContent = 'Оплатить по QR-коду'; } }
     });
   });
 }
-async function createOrder(f, d) {
+async function createOrder(f, d, bonusSpent = 0, careFee = 0) {
   const items = cartItems();
   for (const i of items) { const p = byId(i.pid); if (stockOf(p, i.color, i.size) < i.qty) { toast(`${p.name} ${i.color}: осталось ${stockOf(p, i.color, i.size)} шт.`); return null; } }
   const sub = subtotal(), disc = promoDiscount(sub);
   const n = 1001 + DB.orders.length;
   const o = { id: 'D-' + n, date: Date.now(), status: 'awaiting', items: items.map(i => { const p = byId(i.pid); return { pid: p.id, name: p.name, color: i.color, size: i.size, qty: i.qty, price: priceOf(p), img: coverOf(p, i.color) }; }),
     subtotal: sub, discount: disc, promo: disc ? promoApplied : '', delivery: { service: f.service, city: f.city, address: f.address, cost: d.cost, dist: d.dist },
-    customer: { name: f.name, phone: f.phone, email: f.email }, comment: f.comment, total: sub - disc + d.cost, paidClaimed: false };
+    customer: { name: f.name, phone: f.phone, email: f.email }, comment: f.comment, total: sub - disc - bonusSpent + careFee + d.cost, paidClaimed: false,
+    bonusSpent, returnCare: careFee > 0, returnCarePrice: careFee, bonusEarned: 0 };
   if (SB) {
     const { id: _drop, ...payload } = o;
-    const { data, error } = await SB.rpc('place_order', { p_order: payload });
+    const { data, error } = await SB.rpc('place_order', bonusOn ? { p_order: payload, p_tokens: myTokens.map(t => t.token) } : { p_order: payload });
     if (error) {
       const m = /OUT_OF_STOCK:(.*)/.exec(error.message || '');
-      toast(m ? `${m[1]}: столько уже нет в наличии` : 'Не удалось оформить заказ. Попробуйте ещё раз');
+      toast(m ? `${m[1]}: столько уже нет в наличии` : /BONUS/.test(error.message || '') ? 'Бонусов недостаточно — обновите страницу' : 'Не удалось оформить заказ. Попробуйте ещё раз');
       if (m) { try { await loadRemote(false); } catch {} render(); }
       return null;
     }
@@ -391,8 +488,48 @@ function openOrder(id) {
   <div class="list">${o.items.map(i => `<div class="row"><img class="thumb" src="${esc(i.img)}" alt=""><div class="f"><b>${esc(i.name)}</b><div class="muted small">${esc(i.color)} · ${esc(i.size)} · ${i.qty} шт.</div></div><span class="price">${rub(i.price * i.qty)}</span></div>`).join('')}</div>
   <div class="box" style="margin-top:12px"><div class="sum"><span>Доставка ${o.delivery.service === 'ozon' ? 'Ozon' : 'СДЭК'}</span><span>${o.delivery.cost ? rub(o.delivery.cost) : 'Бесплатно'}</span></div><div class="small muted">${esc(o.delivery.city)}, ${esc(o.delivery.address)}</div>
   ${o.discount ? `<div class="sum sale"><span>Промокод ${esc(o.promo)}</span><span>−${rub(o.discount)}</span></div>` : ''}<div class="sum t"><span>Итого</span><span>${rub(o.total)}</span></div></div>
-  ${o.status === 'awaiting' ? '<button class="btn w blue" id="repay" style="margin-top:12px">Показать QR для оплаты</button>' : ''}</div>`, api => {
+  ${o.bonusSpent ? `<p class="small muted">Оплачено бонусами: ${rub(o.bonusSpent)}</p>` : ''}${o.bonusEarned && o.status === 'done' ? `<p class="small" style="color:var(--green)">Начислено бонусов: ${rub(o.bonusEarned)}</p>` : ''}
+  ${o.returnCare ? `<p class="small muted">Подключён «Возврат без забот»: ${DB.settings.returns.extDays} дней на возврат, обратная доставка за наш счёт.</p>` : ''}
+  ${o.status === 'done' && reviewsOn ? `<h3 style="margin-top:14px">Оцените покупку</h3><div class="list">${[...new Map(o.items.map(i => [i.pid, i])).values()].map(i => `<div class="row"><span class="f">${esc(i.name)}</span>${reviewedKey(o.id, i.pid) ? '<span class="muted small">Отзыв отправлен</span>' : `<button class="btn sm" data-rev="${esc(i.pid)}">Оставить отзыв</button>`}</div>`).join('')}</div>` : ''}
+  ${o.status === 'awaiting' ? '<button class="btn w blue" id="repay" style="margin-top:12px">Показать QR для оплаты</button>' : ''}
+  <button class="btn w sec" style="margin-top:10px" data-contact="${esc(`Здравствуйте! Вопрос по заказу ${o.id}.`)}">Вопрос по заказу</button></div>`, api => {
     const b = api.el.querySelector('#repay'); if (b) b.onclick = () => { api.close(); setTimeout(() => openPay(o), 320); };
+    api.el.addEventListener('click', e => { const t = e.target.closest('[data-rev]'); if (t) { api.close(); setTimeout(() => openReviewForm(o, o.items.find(i => i.pid === t.dataset.rev)), 320); } });
+  });
+}
+const RK = 'desire_reviewed_v1';
+const reviewedKey = (oid, pid) => (ls.get(RK) || []).includes(oid + '|' + pid);
+function openReviewForm(o, item) {
+  let rating = 5, photos = [];
+  sheet('Отзыв: ' + item.name, '', api => {
+    const draw = () => api.set(`<div class="sh-b"><p class="muted small" style="margin-top:4px">${esc(item.color)} · ${esc(item.size)}</p>
+      <div class="rate">${[1, 2, 3, 4, 5].map(i => `<button data-rt="${i}" class="${i <= rating ? 'on' : ''}" aria-label="${i} из 5">${svg('star')}</button>`).join('')}</div>
+      <div class="field"><label for="r_n">Ваше имя</label><input class="inp" id="r_n" maxlength="40" value="${esc((o.customer?.name || '').split(' ')[0] || '')}"></div>
+      <div class="field"><label for="r_t">Отзыв</label><textarea class="inp" id="r_t" maxlength="2000" placeholder="Как сидит, подошёл ли размер, качество ткани"></textarea></div>
+      <div class="phs">${photos.map((src, i) => `<div><img src="${esc(src)}" alt=""><button class="x" data-rx="${i}" aria-label="Удалить фото">×</button></div>`).join('')}</div>
+      ${photos.length < 3 ? '<label class="btn sec sm" style="margin-top:10px">Добавить фото (до 3)<input type="file" accept="image/*" multiple id="r_up" hidden></label>' : ''}
+      <button class="btn w" id="r_send" style="margin-top:16px">Отправить отзыв</button>
+      <p class="small muted">Отзыв появится на сайте после проверки.</p></div>`);
+    let nm = '', tx = '';
+    const keep = () => { const n = api.el.querySelector('#r_n'), t = api.el.querySelector('#r_t'); if (n) nm = n.value; if (t) tx = t.value; };
+    const redraw = () => { keep(); draw(); api.el.querySelector('#r_n').value = nm || api.el.querySelector('#r_n').value; api.el.querySelector('#r_t').value = tx; };
+    draw();
+    api.el.addEventListener('change', async e => { if (e.target.id !== 'r_up') return; keep(); for (const f of [...e.target.files].slice(0, 3 - photos.length)) { try { photos.push(await resizeImg(f, 800, .72)); } catch { toast('Не удалось прочитать фото'); } } draw(); api.el.querySelector('#r_n').value = nm; api.el.querySelector('#r_t').value = tx; });
+    api.el.addEventListener('click', async e => {
+      const t = e.target.closest('button'); if (!t) return;
+      if (t.dataset.rt) { rating = +t.dataset.rt; redraw(); }
+      if (t.dataset.rx) { photos.splice(+t.dataset.rx, 1); redraw(); }
+      if (t.id === 'r_send') {
+        keep(); const data = { name: nm.trim() || 'Покупатель', rating, text: tx.trim(), photos, color: item.color, size: item.size, date: Date.now() };
+        t.disabled = true;
+        if (SB) {
+          const { error } = await SB.rpc('add_review', { p_token: o.token, p_pid: item.pid, p_data: data });
+          if (error) { t.disabled = false; return toast(/DUPLICATE/.test(error.message) ? 'Вы уже оставили отзыв на эту вещь' : /TOO_BIG/.test(error.message) ? 'Фото слишком большие — уберите одно' : 'Не удалось отправить отзыв'); }
+        } else DB.reviews.unshift({ ...data, id: uid(), pid: item.pid, orderId: o.id, status: 'pending' }), save();
+        ls.set(RK, [...(ls.get(RK) || []), o.id + '|' + item.pid]);
+        api.close(); toast('Спасибо! Отзыв появится после проверки');
+      }
+    });
   });
 }
 
@@ -423,12 +560,13 @@ function viewAdmin() {
   const today = new Date().toDateString();
   const td = DB.orders.filter(o => new Date(o.date).toDateString() === today && o.status !== 'cancelled');
   const low = DB.products.reduce((a, p) => a + p.colors.reduce((b, c) => b + p.sizes.filter(s => stockOf(p, c, s) <= 1).length, 0), 0);
-  const T = [['orders', 'Заказы'], ['products', 'Товары'], ['stock', 'Остатки'], ['promo', 'Акции'], ['setup', 'Настройки']];
+  const pend = DB.reviews.filter(r => r.status === 'pending').length;
+  const T = [['orders', 'Заказы'], ['products', 'Товары'], ['stock', 'Остатки'], ['promo', 'Акции'], ['reviews', 'Отзывы' + (pend ? ` (${pend})` : '')], ['setup', 'Настройки']];
   return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><h1>Панель магазина</h1><span style="display:flex;gap:8px">${SB ? '<button class="btn sm sec" id="reload">Обновить</button>' : ''}<button class="btn sm sec" id="logout">Выйти</button></span></div>
   <div class="kpis"><div class="kpi"><span class="muted small">Заказы сегодня</span><b>${td.length}</b></div><div class="kpi"><span class="muted small">Выручка сегодня</span><b>${rub(td.reduce((a, o) => a + o.total, 0))}</b></div>
   <div class="kpi"><span class="muted small">Ждут проверки оплаты</span><b>${DB.orders.filter(o => o.status === 'awaiting').length}</b></div><div class="kpi"><span class="muted small">Вариантов с остатком ≤ 1</span><b class="${low ? 'low' : ''}">${low}</b></div></div>
   <div class="seg adm" style="margin:14px 0 16px">${T.map(([k, t]) => `<button class="${adm === k ? 'on' : ''}" data-adm="${k}">${t}</button>`).join('')}</div>
-  <div id="admBody">${({ orders: admOrders, products: admProducts, stock: admStock, promo: admPromo, setup: admSetup })[adm]()}</div>`;
+  <div id="admBody">${({ orders: admOrders, products: admProducts, stock: admStock, promo: admPromo, reviews: admReviews, setup: admSetup })[adm]()}</div>`;
 }
 function admOrders() {
   let l = [...DB.orders].reverse(); if (ordF !== 'all') l = l.filter(o => o.status === ordF);
@@ -436,8 +574,24 @@ function admOrders() {
   ${l.length ? `<div class="list">${l.map(o => `<div class="row" style="flex-wrap:wrap"><div class="f" style="flex:1 1 220px"><b>${esc(o.id)}</b> · ${esc(o.customer.name)} · <a href="tel:${esc(o.customer.phone)}">${esc(o.customer.phone)}</a>
   <div class="small muted">${new Date(o.date).toLocaleString('ru-RU')} · ${o.delivery.service === 'ozon' ? 'Ozon' : 'СДЭК'}: ${esc(o.delivery.city)}, ${esc(o.delivery.address)}</div>
   <div class="small">${o.items.map(i => `${esc(i.name)} ${esc(i.color)} ${esc(i.size)} ×${i.qty}`).join('; ')}</div>${o.comment ? `<div class="small muted">«${esc(o.comment)}»</div>` : ''}
+  ${o.returnCare ? `<div class="small"><span class="st paid">Возврат без забот</span></div>` : ''}${o.bonusSpent ? `<div class="small muted">Бонусами: −${rub(o.bonusSpent)}</div>` : ''}${o.bonusEarned ? `<div class="small" style="color:var(--green)">Начислено бонусов: ${rub(o.bonusEarned)}</div>` : ''}
   ${o.paidClaimed && o.status === 'awaiting' ? '<div class="small" style="color:var(--accent)">Покупатель нажал «Я оплатил» — проверьте поступление</div>' : ''}</div>
   <span class="price">${rub(o.total)}</span><select class="inp" data-ost="${esc(o.id)}" style="width:auto;height:38px;font-size:14px">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${o.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>`).join('')}</div>` : '<div class="empty"><b>Заказов пока нет</b>Оформите тестовый заказ как покупатель — он появится здесь</div>'}`;
+}
+function admReviews() {
+  if (!reviewsOn) return '<div class="note">Отзывы ещё не подключены в базе. Запустите обновлённый файл supabase-setup.sql в Supabase → SQL Editor.</div>';
+  const l = [...DB.reviews].sort((a, b) => (a.status === 'pending' ? -1 : 0) - (b.status === 'pending' ? -1 : 0));
+  return l.length ? `<div class="list">${l.map(r => `<div class="row" style="flex-wrap:wrap;align-items:flex-start"><div class="f" style="flex:1 1 240px"><b>${esc(byId(r.pid)?.name || r.pid)}</b> · ${esc(r.name)} ${stars(r.rating, 12)} <span class="st ${r.status === 'published' ? 'shipped' : r.status === 'hidden' ? 'cancelled' : 'awaiting'}">${r.status === 'published' ? 'опубликован' : r.status === 'hidden' ? 'скрыт' : 'ждёт проверки'}</span>
+    <div class="small muted">${new Date(r.date).toLocaleDateString('ru-RU')}${r.color ? ' · ' + esc(r.color) : ''}${r.size ? ' · ' + esc(r.size) : ''}</div>${r.text ? `<p style="margin:6px 0">${esc(r.text)}</p>` : ''}
+    ${(r.photos || []).length ? `<div class="rph">${r.photos.map(src => /^data:image\/jpeg;base64,/.test(src) ? `<img src="${esc(src)}" alt="">` : '').join('')}</div>` : ''}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">${r.status !== 'published' ? `<button class="btn sm" data-rvs="published" data-rid="${esc(r.id)}">Опубликовать</button>` : ''}${r.status !== 'hidden' ? `<button class="btn sm sec" data-rvs="hidden" data-rid="${esc(r.id)}">Скрыть</button>` : ''}<button class="btn sm red" data-rvd="${esc(r.id)}">Удалить</button></div></div>`).join('')}</div>`
+    : '<div class="empty"><b>Отзывов пока нет</b>Покупатели оставляют отзыв в профиле после статуса «Получен»</div>';
+}
+async function setReview(id, status) {
+  const r = DB.reviews.find(x => x.id === id); if (!r) return;
+  if (SB) { const q = status ? SB.from('reviews').update({ status }).eq('id', id) : SB.from('reviews').delete().eq('id', id); const { error } = await q; if (error) return toast('Не удалось: ' + error.message); }
+  if (status) r.status = status; else DB.reviews = DB.reviews.filter(x => x.id !== id);
+  if (!SB) save(); render(); toast(status === 'published' ? 'Отзыв опубликован' : status ? 'Отзыв скрыт' : 'Отзыв удалён');
 }
 function admProducts() {
   const q = admQ.toLowerCase(), l = DB.products.filter(p => !q || (p.name + p.cat).toLowerCase().includes(q));
@@ -473,7 +627,14 @@ function admSetup() {
   ${['ozon', 'cdek'].map(k => `<p style="margin:6px 0"><b>${k === 'ozon' ? 'Ozon' : 'СДЭК'}</b></p><div class="two" style="grid-template-columns:repeat(3,minmax(0,1fr))"><div class="field"><label>База, ₽</label><input class="inp" type="number" data-set="${k}.base" value="${s[k].base}"></div><div class="field"><label>За км, ₽</label><input class="inp" type="number" step="0.005" data-set="${k}.perKm" value="${s[k].perKm}"></div><div class="field"><label>Доп. вещь, ₽</label><input class="inp" type="number" data-set="${k}.perItem" value="${s[k].perItem}"></div></div>`).join('')}
   <div class="field"><label for="d2">Доплата за удалённые регионы, ₽</label><input class="inp" id="d2" type="number" data-set="remoteExtra" value="${s.remoteExtra}"></div>
   <p class="small muted">Пример: ${esc(s.origin)} → ${s.origin === 'Москва' ? 'Иркутск' : 'Москва'}, Ozon, 1 вещь: ${rub(delivery('ozon', s.origin === 'Москва' ? 'Иркутск' : 'Москва', [{ pid: 'yosh', qty: 1 }])?.full || 0)}.</p></div>
-  <div class="box" style="margin-top:12px"><h3>Контакты и доступ</h3><div class="two"><div class="field"><label>Instagram</label><input class="inp" data-set="contacts.instagram" value="${esc(s.contacts.instagram)}"></div><div class="field"><label>Telegram</label><input class="inp" data-set="contacts.telegram" value="${esc(s.contacts.telegram)}"></div>
+  <div class="box" style="margin-top:12px"><h3>Возврат без забот</h3><div class="switch"><span>Предлагать при оформлении</span><input type="checkbox" data-set="returns.extOn" ${s.returns.extOn ? 'checked' : ''}></div>
+  <div class="two"><div class="field"><label>Цена, ₽</label><input class="inp" type="number" min="0" data-set="returns.extPrice" value="${s.returns.extPrice}"></div><div class="field"><label>Дней на возврат</label><input class="inp" type="number" min="7" data-set="returns.extDays" value="${s.returns.extDays}"></div></div></div>
+  <div class="box" style="margin-top:12px"><h3>Бонусы</h3><div class="switch"><span>Бонусная программа включена</span><input type="checkbox" data-set="bonus.on" ${s.bonus.on ? 'checked' : ''}></div>
+  <div class="two"><div class="field"><label>Начислять, % от заказа</label><input class="inp" type="number" min="0" max="50" data-set="bonus.earnPct" value="${s.bonus.earnPct}"></div><div class="field"><label>Оплатить бонусами до, %</label><input class="inp" type="number" min="0" max="100" data-set="bonus.maxSpendPct" value="${s.bonus.maxSpendPct}"></div></div>
+  <p class="small muted">Бонусы начисляются, когда заказу ставится статус «Получен». При отмене заказа списанные бонусы возвращаются.</p></div>
+  <div class="box" style="margin-top:12px"><h3>Контакты и доступ</h3><div class="two"><div class="field"><label>Instagram</label><input class="inp" data-set="contacts.instagram" value="${esc(s.contacts.instagram)}"></div><div class="field"><label>Telegram-канал</label><input class="inp" data-set="contacts.telegram" value="${esc(s.contacts.telegram)}"></div>
+  <div class="field"><label>Telegram-группа</label><input class="inp" data-set="contacts.group" value="${esc(s.contacts.group)}"></div><div class="field"><label>Telegram менеджера</label><input class="inp" data-set="contacts.managerTg" value="${esc(s.contacts.managerTg)}"></div>
+  <div class="field"><label>WhatsApp (номер)</label><input class="inp" data-set="contacts.whatsapp" inputmode="tel" value="${esc(s.contacts.whatsapp)}"></div>
   ${SB ? '' : `<div class="field"><label>PIN сотрудников</label><input class="inp" data-set="pin" inputmode="numeric" value="${esc(s.pin)}"></div>`}</div></div>
   ${SB ? `<div class="box" style="margin-top:12px"><h3>База Supabase</h3><p class="small muted">Подключена. Товаров в базе: ${DB.products.length}, заказов: ${DB.orders.length}.</p><button class="btn sec" id="seed">Загрузить каталог в базу</button></div>` : `<div class="box" style="margin-top:12px"><h3>Тестовые данные</h3><p class="small muted">Вернуть каталог, остатки и акции к исходным и удалить тестовые заказы.</p><button class="btn red sec" id="reset">Сбросить к исходным</button></div>`}`;
 }
@@ -487,7 +648,7 @@ function bindAdmin() {
     const t = e.target;
     if (t.dataset.stk) { const p = byId(t.dataset.stk); p.stock[t.dataset.k] = Math.max(0, parseInt(t.value) || 0); t.classList.toggle('low', p.stock[t.dataset.k] <= 1); save(); toast('Остаток сохранён'); }
     if (t.dataset.ost) { setStatus(t.dataset.ost, t.value); }
-    if (t.dataset.set) { const path = t.dataset.set.split('.'); let o = DB.settings; while (path.length > 1) o = o[path.shift()]; const num = t.type === 'number'; o[path[0]] = num ? +t.value : t.value; save(); toast('Сохранено'); }
+    if (t.dataset.set) { const path = t.dataset.set.split('.'); let o = DB.settings; while (path.length > 1) o = o[path.shift()]; o[path[0]] = t.type === 'checkbox' ? t.checked : t.type === 'number' ? +t.value : t.value; save(); toast('Сохранено'); }
   };
   v.onclick = e => {
     const t = e.target.closest('button'); if (!t) return;
@@ -496,6 +657,8 @@ function bindAdmin() {
     if (t.id === 'reload') { t.disabled = true; loadRemote(true).then(() => { render(); toast('Обновлено'); }).catch(() => { t.disabled = false; toast('Не удалось обновить'); }); }
     if (t.id === 'seed') confirmBox('Загрузить 40 моделей из каталога в базу? Товары с такими же названиями будут перезаписаны.', async () => { DB.products = clone(SEED.products); if (!DB.promos.length) DB.promos = clone(SEED.promos); if (!DB.campaigns.length) DB.campaigns = clone(SEED.campaigns); clearTimeout(syncT); if (await sbSync()) { toast('Каталог загружен в базу'); render(); } });
     if (t.dataset.of) { ordF = t.dataset.of; render(); }
+    if (t.dataset.rvs) setReview(t.dataset.rid, t.dataset.rvs);
+    if (t.dataset.rvd) confirmBox('Удалить отзыв?', () => setReview(t.dataset.rvd, ''));
     if (t.dataset.edit) editProduct(t.dataset.edit);
     if (t.id === 'newP') editProduct(null);
     if (t.dataset.ptog) { const p = DB.promos.find(x => x.id === t.dataset.ptog); p.active = !p.active; save(); render(); }
@@ -522,13 +685,15 @@ function setStatus(id, st) {
   const o = DB.orders.find(x => x.id === id), prev = o.status;
   if (st === 'cancelled' && prev !== 'cancelled') o.items.forEach(i => { const p = byId(i.pid); if (p) p.stock[i.color + '|' + i.size] = (p.stock[i.color + '|' + i.size] || 0) + i.qty; });
   if (prev === 'cancelled' && st !== 'cancelled') o.items.forEach(i => { const p = byId(i.pid); if (p) p.stock[i.color + '|' + i.size] -= i.qty; });
-  o.status = st; save(); render(); toast(st === 'cancelled' ? 'Заказ отменён, товар вернулся в остатки' : 'Статус: ' + STATUS[st]);
+  o.status = st; const B = DB.settings.bonus;
+  o.bonusEarned = st === 'done' && B.on ? Math.floor(Math.max(0, (o.subtotal || 0) - (o.discount || 0) - (o.bonusSpent || 0)) * B.earnPct / 100) : 0;
+  save(); render(); toast(st === 'cancelled' ? 'Заказ отменён, товар вернулся в остатки' : 'Статус: ' + STATUS[st]);
 }
 function confirmBox(msg, yes) {
   sheet('Подтверждение', `<div class="sh-b"><p>${esc(msg)}</p><div class="two"><button class="btn sec" data-close>Отмена</button><button class="btn" id="yes" style="background:var(--red);color:#fff">Да</button></div></div>`, api => { api.el.querySelector('#yes').onclick = () => { api.close(); yes(); }; });
 }
-function resizeImg(file) {
-  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => { const im = new Image(); im.onload = () => { const k = Math.min(1, 700 / im.width); const c = document.createElement('canvas'); c.width = im.width * k; c.height = im.height * k; c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); res(c.toDataURL('image/jpeg', .78)); }; im.onerror = rej; im.src = r.result; }; r.onerror = rej; r.readAsDataURL(file); });
+function resizeImg(file, max = 700, q = .78) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => { const im = new Image(); im.onload = () => { const k = Math.min(1, max / Math.max(im.width, im.height)); const c = document.createElement('canvas'); c.width = im.width * k; c.height = im.height * k; c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); res(c.toDataURL('image/jpeg', q)); }; im.onerror = rej; im.src = r.result; }; r.onerror = rej; r.readAsDataURL(file); });
 }
 function editProduct(id) {
   const src = id ? byId(id) : { id: '', name: '', cat: DB.categories[0], price: 0, oldPrice: 0, desc: '', comp: '', specs: '', sizes: ['42–48'], colors: ['Чёрный'], photos: [], stock: {}, hidden: false, freeShip: false, isNew: true, tag: '' };
@@ -540,6 +705,7 @@ function editProduct(id) {
     <div class="field"><label for="e_p">Цена, ₽</label><input class="inp" id="e_p" type="number" min="0" value="${p.price}"></div><div class="field"><label for="e_o">Старая цена, ₽ (для скидки)</label><input class="inp" id="e_o" type="number" min="0" value="${p.oldPrice || ''}"></div></div>
     <div class="field"><label for="e_d">Описание</label><textarea class="inp" id="e_d">${esc(p.desc)}</textarea></div>
     <div class="two"><div class="field"><label for="e_m">Состав</label><input class="inp" id="e_m" value="${esc(p.comp)}"></div><div class="field"><label for="e_s">Замеры</label><input class="inp" id="e_s" value="${esc(p.specs)}"></div></div>
+    <div class="field"><label for="e_care">Уход (пусто — подставится подсказка по составу)</label><textarea class="inp" id="e_care" placeholder="${esc(defaultCare(p))}">${esc(p.care || '')}</textarea></div>
     <div class="field"><label for="e_col">Цвета через запятую</label><input class="inp" id="e_col" value="${esc(p.colors.join(', '))}"></div>
     <div class="field"><label for="e_sz">Размеры через запятую</label><input class="inp" id="e_sz" value="${esc(p.sizes.join(', '))}"></div>
     <div class="switch"><span>Показывать в магазине</span><input type="checkbox" id="e_h" ${p.hidden ? '' : 'checked'}></div>
@@ -551,7 +717,7 @@ function editProduct(id) {
     <button class="btn w" id="e_save" style="margin-top:16px">Сохранить</button>${id ? '<button class="btn w red" id="e_del" style="margin-top:6px">Удалить товар</button>' : ''}</div>`);
     const read = () => {
       p.name = $('#e_n').value.trim(); p.cat = $('#e_c').value; p.tag = $('#e_t').value.trim(); p.price = +$('#e_p').value || 0; p.oldPrice = +$('#e_o').value || 0;
-      p.desc = $('#e_d').value; p.comp = $('#e_m').value; p.specs = $('#e_s').value; p.hidden = !$('#e_h').checked; p.freeShip = $('#e_f').checked; p.isNew = $('#e_new').checked;
+      p.desc = $('#e_d').value; p.care = $('#e_care').value.trim(); p.comp = $('#e_m').value; p.specs = $('#e_s').value; p.hidden = !$('#e_h').checked; p.freeShip = $('#e_f').checked; p.isNew = $('#e_new').checked;
       api.el.querySelectorAll('[data-ek]').forEach(x => p.stock[x.dataset.ek] = Math.max(0, parseInt(x.value) || 0));
     };
     draw();
@@ -582,6 +748,9 @@ function editProduct(id) {
 document.addEventListener('click', e => {
   const t = e.target.closest('button,[data-go]'); if (!t) return;
   if (t.dataset.inst) return installAction(t.dataset.inst);
+  if (t.dataset.contact !== undefined) return openContact(t.dataset.contact);
+  if (t.dataset.returns) return openReturns();
+  if (t.id === 'chatBtn') return openContact('');
   if (t.dataset.go) return go(t.dataset.go);
   if (t.dataset.fav && !t.closest('.sheet')) return toggleFav(t.dataset.fav);
   if (t.dataset.open && !t.closest('.sheet')) return openProduct(t.dataset.open);
@@ -694,7 +863,7 @@ if (SB) {
   (async () => {
     try {
       const { data } = await SB.auth.getSession(); staff = !!data.session;
-      await loadRemote(staff); await loadMine();
+      await loadRemote(staff); await loadMine(); await loadBonus();
     } catch (e) { loadErr = 'Не удалось загрузить магазин: ' + (e.message || e); }
     clearTimeout(tm); if (loading) { loading = false; render(); }
   })();

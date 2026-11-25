@@ -148,6 +148,22 @@ td.n{text-align:right;white-space:nowrap}
 @media(max-width:600px){.hero{grid-template-columns:1fr;min-height:0}.hero .ph{order:-1}.hero .ph img{aspect-ratio:4/5}.two{grid-template-columns:1fr}table{font-size:13px}}
 /* На Netlify в правом нижнем углу плашка «Powered by Netlify» — поднимаем меню над ней */
 body.nf .tabs{padding-bottom:calc(60px + var(--safeB))}body.nf main{padding-bottom:calc(150px + var(--safeB))}body.nf .sheet{padding-bottom:calc(84px + var(--safeB))}
+/* О нас, отзывы, бонусы, опции */
+.about{margin-top:28px;border-radius:28px;background:var(--beige);padding:clamp(22px,4vw,40px);display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:24px;align-items:center}
+.about p{margin:0 0 8px;font-size:17px;max-width:52ch}
+.ab-st{display:grid;gap:10px}.ab-st div{background:var(--card);border-radius:18px;padding:14px 16px}.ab-st b{display:block;font:600 26px/1.1 Lora,Georgia,serif}.ab-st span{font-size:14px;color:var(--muted)}
+@media(max-width:700px){.about{grid-template-columns:1fr}}
+.stars{display:inline-flex;gap:1px;vertical-align:-2px}.stars svg{width:var(--s);height:var(--s);fill:var(--line);stroke:none}.stars svg.on{fill:#f5a623}
+.rt{color:var(--ink);white-space:nowrap}.rt i{font-style:normal;color:var(--muted)}
+.rlink{display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-size:14px;min-height:32px}
+.lnk{color:var(--accent);font-size:inherit;text-decoration:underline;text-underline-offset:2px}
+.rev{padding:12px 0;border-bottom:.5px solid var(--line)}.rev p{margin:6px 0 0}.rh{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.rph{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}.rph img{width:72px;height:96px;object-fit:cover;border-radius:10px;display:block}
+.rate{display:flex;gap:6px;margin:10px 0 14px}.rate button{width:46px;height:46px;border-radius:12px;background:var(--fill);display:grid;place-items:center}.rate svg{width:28px;height:28px;fill:var(--line)}.rate .on svg{fill:#f5a623}
+.opt{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:var(--card);margin-bottom:10px;cursor:pointer}.opt input{width:22px;height:22px;margin-top:2px;flex:none;accent-color:var(--accent)}
+.bonus{margin:6px 0 4px;border-radius:var(--r);padding:16px 18px;background:var(--btn);color:var(--btnInk)}.bonus>div{display:flex;justify-content:space-between;align-items:baseline;gap:10px}.bonus b{font-size:28px;letter-spacing:-.02em}.bonus p{margin:6px 0 0;opacity:.75}
+.ul{margin:6px 0;padding-left:20px}.ul li{margin:4px 0}
+.btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8}
 /* Установка на телефон */
 .inst{display:flex;align-items:center;gap:12px;margin:12px 0 4px;padding:12px 12px 12px 14px;border-radius:var(--r);background:var(--card);border:1px solid var(--line)}
 .inst img{width:44px;height:44px;border-radius:11px;flex:none}
@@ -164,6 +180,7 @@ body.nf .tabs{padding-bottom:calc(60px + var(--safeB))}body.nf main{padding-bott
 <header class="top">
   <button class="brand" id="logo" aria-label="На главную">DESIRE</button>
   <span class="sp"></span>
+  <button class="icon" id="chatBtn" aria-label="Написать нам"><svg viewBox="0 0 24 24"><path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4V6a1 1 0 0 1 1-1z"/><path d="M8 10h8M8 13h5"/></svg></button>
   <button class="icon" id="searchBtn" aria-label="Поиск"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
 </header>
 <main id="view"></main>
