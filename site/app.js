@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '1.6';
+const APP_VERSION = '1.7';
 /* ===== Хранилище (для теста — в браузере; на Netlify заменить на Supabase/Firebase через Store.load/save) ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -199,19 +199,20 @@ function openContact(text) {
    mode 'law':  возврат 7 дней на всё, платная опция — расширенный возврат. Переключается в Настройках. */
 const paidMode = () => DB.settings.returns.mode !== 'law';
 const isSale = p => !!(p && oldOf(p));
-const cartHasSale = () => cartItems().some(i => isSale(byId(i.pid)));
+const cartHasSale = () => cartItems().some(i => isSale(byId(i.pid)));  // (не используется в режиме 'paid' — гарантия на весь заказ)
 const optName = () => paidMode() ? 'Гарантия возврата' : 'Возврат без забот';
-const optText = () => paidMode() ? 'Акционные вещи можно будет вернуть в течение 7 дней, как обычные.' : `${DB.settings.returns.extDays} дней на возврат вместо 7, обратную доставку оплачиваем мы. Для всех вещей в заказе, включая акционные.`;
+const optText = () => paidMode() ? 'Любую вещь из заказа можно будет вернуть в течение 7 дней после получения.' : `${DB.settings.returns.extDays} дней на возврат вместо 7, обратную доставку оплачиваем мы. Для всех вещей в заказе, включая акционные.`;
 function openReturns() {
   const r = DB.settings.returns, c = DB.settings.contacts;
-  sheet('Возврат и обмен', `<div class="sh-b">
-    ${paidMode() ? `<div class="note" style="margin-top:4px"><b>7 дней на возврат</b> — с момента получения заказа, для вещей по обычной цене.</div>
-    <div class="note" style="margin-top:8px"><b>Товары по акции возврату не подлежат</b> — поэтому на них такая цена. Хотите иметь возможность вернуть акционную вещь — добавьте при оформлении <b>«Гарантию возврата» за ${rub(r.extPrice)}</b>.</div>` : `<div class="note" style="margin-top:4px"><b>7 дней на возврат</b> — с момента получения заказа. Касается всех вещей, в том числе купленных по акции.</div>`}
-    <h3 style="margin-top:16px">Условия</h3>
-    <ul class="ul"><li>Вещь не носили, сохранены товарный вид, бирки и ярлыки.</li><li>Обратную доставку оплачивает покупатель.</li><li>Деньги за товар вернём в течение 10 дней после получения заявления — тем же способом, которым вы платили.</li><li>Если вещь с браком — обменяем или вернём деньги, доставку в этом случае оплачиваем мы.</li></ul>
+  sheet('Условия возврата', `<div class="sh-b">
+    ${paidMode() ? `<div class="note" style="margin-top:4px"><b>Возврат товаров не предусмотрен</b> — это позволяет нам держать такие цены.</div>
+    <div class="note" style="margin-top:8px">Если вы не согласны с этим условием — добавьте при оформлении заказа <b>«Гарантию возврата» за ${rub(r.extPrice)}</b>. С ней любую вещь из заказа можно вернуть в течение 7 дней после получения.</div>` : `<div class="note" style="margin-top:4px"><b>7 дней на возврат</b> — с момента получения заказа. Касается всех вещей, в том числе купленных по акции.</div>`}
+    <h3 style="margin-top:16px">${paidMode() ? 'Условия возврата по гарантии' : 'Условия'}</h3>
+    <ul class="ul"><li>Вещь не носили, сохранены товарный вид, бирки и ярлыки.</li><li>Обратную доставку оплачивает покупатель.</li><li>Деньги за товар вернём в течение 10 дней после получения заявления — тем же способом, которым вы платили.</li></ul>
+    <div class="note" style="margin-top:10px"><b>Вещь с браком</b> обменяем или вернём деньги в любом случае — с гарантией и без. Доставку оплачиваем мы.</div>
     <h3 style="margin-top:16px">Как вернуть</h3>
     <ol class="steps"><li><div>Напишите нам в Telegram или WhatsApp: номер заказа и какую вещь возвращаете. Пришлём адрес для отправки.</div></li><li><div>Упакуйте вещь и вложите заявление в свободной форме: ФИО, номер заказа, причина, куда вернуть деньги.</div></li><li><div>Отправьте через <b>СДЭК</b> или <b>Почту России</b> и пришлите нам трек-номер.</div></li></ol>
-    ${r.extOn ? `<div class="box" style="margin-top:14px"><h3>${optName()} · ${rub(r.extPrice)}</h3><p class="small muted" style="margin:0">Добавляется при оформлении заказа. ${optText()}</p></div>` : ''}
+    ${r.extOn && !paidMode() ? `<div class="box" style="margin-top:14px"><h3>${optName()} · ${rub(r.extPrice)}</h3><p class="small muted" style="margin:0">Добавляется при оформлении заказа. ${optText()}</p></div>` : ''}
     <button class="btn w sec" style="margin-top:14px" data-contact="Здравствуйте! Хочу оформить возврат по заказу №">Написать про возврат</button></div>`);
 }
 
@@ -238,14 +239,14 @@ function viewHome() {
   ${sale.length ? `<h2>Скидки</h2><div class="grid">${sale.map(cardHtml).join('')}</div>` : ''}
   <h2>Костюмы и новинки</h2><div class="grid">${news.map(cardHtml).join('')}</div>
   <section class="about"><div class="ab-tx"><span class="muted small">О нас</span><h2 style="margin:6px 0 10px">DESIRE — 13 лет с вами</h2>
-  <p>Мы начинали в Иркутске и уже 13 лет одеваем девушек, которые любят удобную и красивую одежду на каждый день. Костюмы шьём сами — на собственном производстве, небольшими партиями.</p>
+  <p>Мы начинали в Иркутске и уже 13 лет одеваем девушек по всей России, которые любят удобную и красивую одежду на каждый день. Всю нашу линейку шьём сами — на собственном производстве, небольшими партиями.</p>
 </div>
-  <div class="ab-st"><div><b>13</b><span>лет с иркутской аудиторией</span></div><div><b>Свой</b><span>пошив костюмов</span></div><div><b>РФ</b><span>доставка в ПВЗ Ozon и СДЭК</span></div></div></section>
+  <div class="ab-st"><div><b>13</b><span>лет с любимыми покупательницами</span></div><div><b>Свой</b><span>пошив всей линейки</span></div></div></section>
   <h2>Как мы работаем</h2><div class="stack3">
   <div class="box"><h3>Доставка в ПВЗ</h3><p class="muted small" style="margin:0">Ozon или СДЭК. Стоимость считается автоматически по городу. От ${DB.settings.freeFromItems} шт. — бесплатно.</p></div>
   <div class="box"><h3>Оплата по QR</h3><p class="muted small" style="margin:0">Сканируйте код в приложении любого банка — сумма подставится сама.</p></div>
   <div class="box"><h3>Помощь с размером</h3><p class="muted small" style="margin:0">Напишите нам — подскажем по посадке.</p><button class="btn sm sec" style="margin-top:10px" data-contact="">Написать</button></div>
-  <div class="box"><h3>Возврат 7 дней</h3><p class="muted small" style="margin:0">На все вещи, в том числе по акции.</p><button class="btn sm sec" style="margin-top:10px" data-returns="1">Условия</button></div></div>`;
+  <div class="box"><h3>Условия возврата</h3><button class="btn sm sec" style="margin-top:6px" data-returns="1">Подробнее</button></div></div>`;
 }
 function viewCatalog() {
   let list = visible();
@@ -293,7 +294,7 @@ function viewProfile() {
   <a class="row" href="${esc(tgLink(c.telegram))}"><span class="f">Telegram-канал</span><span class="muted r">новинки и акции</span></a>
   <a class="row" href="https://instagram.com/${esc(c.instagram)}"><span class="f">Instagram</span><span class="muted r">@${esc(c.instagram)}</span></a></div>
   <h2>Новинки и акции</h2><div class="list"><a class="row" href="${esc(tgLink(c.telegram))}"><span class="f">Подписаться в Telegram</span><span class="muted r">первыми узнавайте о новинках</span></a><div class="row"><span class="f">Уведомления в приложении</span><span class="muted small r">скоро</span></div></div>
-  <h2>Покупателям</h2><div class="list"><div class="row"><span class="f">Доставка</span><span class="muted small r">Ozon и СДЭК, ПВЗ по всей России</span></div><div class="row"><span class="f">Оплата</span><span class="muted small r">По QR-коду через банк</span></div><div class="row"><span class="f">Удалённые регионы</span><span class="muted small r">Камчатка, Сахалин, Калининград, Крым — с доплатой</span></div><button class="row" style="width:100%;text-align:left" data-returns="1"><span class="f">Возврат и обмен</span><span class="muted small r">7 дней, условия ›</span></button></div>
+  <h2>Покупателям</h2><div class="list"><div class="row"><span class="f">Доставка</span><span class="muted small r">Ozon и СДЭК, ПВЗ по всей России</span></div><div class="row"><span class="f">Оплата</span><span class="muted small r">По QR-коду через банк</span></div><div class="row"><span class="f">Удалённые регионы</span><span class="muted small r">Камчатка, Сахалин, Калининград, Крым — с доплатой</span></div><button class="row" style="width:100%;text-align:left" data-returns="1"><span class="f">Условия возврата</span><span class="muted small r">подробнее ›</span></button></div>
   <div style="margin-top:28px;text-align:center"><button class="btn sec" id="staffBtn">${staff ? 'Открыть панель сотрудника' : 'Вход для сотрудников'}</button><p class="small muted" style="margin-top:14px">Версия ${APP_VERSION}</p></div>`;
 }
 
@@ -336,7 +337,7 @@ function openProduct(id) {
       <h3 style="margin-top:18px">Описание</h3><p style="margin:0 0 10px">${esc(p.desc)}</p>
       <div class="list"><div class="row"><span class="f muted">Состав</span><span class="r">${esc(p.comp)}</span></div><div class="row"><span class="f muted">Размер</span><span class="r">${esc(p.sizes.join(', '))}</span></div><div class="row"><span class="f muted">Замеры</span><span class="r">${esc(p.specs)}</span></div></div>
       <h3 style="margin-top:18px">Уход</h3><p style="margin:0 0 10px">${esc(careOf(p))}</p>
-      ${paidMode() && isSale(p) ? `<div class="note" style="margin-bottom:10px">Товар по акции — без возврата, поэтому такая цена. Возможность возврата можно добавить при оформлении за ${rub(DB.settings.returns.extPrice)}. <button class="lnk" data-returns="1">Условия</button></div>` : `<p class="small muted" style="margin:0 0 10px">Возврат 7 дней — <button class="lnk" data-returns="1">условия</button></p>`}
+      <p class="small muted" style="margin:0 0 10px"><button class="lnk" data-returns="1">Условия возврата</button></p>
       ${reviewsHtml(p)}
       ${similar(p)}</div>`);
     };
@@ -389,9 +390,9 @@ function openCheckout() {
     const R = DB.settings.returns, B = DB.settings.bonus;
     const bonusMax = () => bonusOn && B.on ? Math.max(0, Math.min(bonusBal, Math.floor((subtotal() - promoDiscount(subtotal())) * B.maxSpendPct / 100))) : 0;
     const bonusUse = () => f.useBonus ? bonusMax() : 0;
-    const optShown = () => R.extOn && (!paidMode() || cartHasSale());
+    const optShown = () => R.extOn;
     const careFee = () => optShown() && f.returnCare ? +R.extPrice || 0 : 0;
-    const xtraHtml = () => `${paidMode() && cartHasSale() ? `<p class="small muted" style="margin:0 0 6px">В корзине есть товары по акции — они без возврата.</p>` : ''}${optShown() ? `<label class="opt"><input type="checkbox" id="xc" ${f.returnCare ? 'checked' : ''}><span><b>${optName()} · ${rub(R.extPrice)}</b><br><span class="small muted">${optText()}</span></span></label>` : ''}
+    const xtraHtml = () => `${paidMode() ? `<p class="small muted" style="margin:0 0 6px">Возврат товаров не предусмотрен. Хотите возможность вернуть — добавьте гарантию.</p>` : ''}${optShown() ? `<label class="opt"><input type="checkbox" id="xc" ${f.returnCare ? 'checked' : ''}><span><b>${optName()} · ${rub(R.extPrice)}</b><br><span class="small muted">${optText()}</span></span></label>` : ''}
       ${bonusMax() ? `<label class="opt"><input type="checkbox" id="xb" ${f.useBonus ? 'checked' : ''}><span><b>Списать ${rub(bonusMax())} бонусами</b><br><span class="small muted">На счёте ${rub(bonusBal)}, можно оплатить до ${B.maxSpendPct}% заказа</span></span></label>` : ''}`;
     const draw = () => {
       const sub = subtotal(), disc = promoDiscount(sub), d = calc();
@@ -636,8 +637,8 @@ function admSetup() {
   ${['ozon', 'cdek'].map(k => `<p style="margin:6px 0"><b>${k === 'ozon' ? 'Ozon' : 'СДЭК'}</b></p><div class="two" style="grid-template-columns:repeat(3,minmax(0,1fr))"><div class="field"><label>База, ₽</label><input class="inp" type="number" data-set="${k}.base" value="${s[k].base}"></div><div class="field"><label>За км, ₽</label><input class="inp" type="number" step="0.005" data-set="${k}.perKm" value="${s[k].perKm}"></div><div class="field"><label>Доп. вещь, ₽</label><input class="inp" type="number" data-set="${k}.perItem" value="${s[k].perItem}"></div></div>`).join('')}
   <div class="field"><label for="d2">Доплата за удалённые регионы, ₽</label><input class="inp" id="d2" type="number" data-set="remoteExtra" value="${s.remoteExtra}"></div>
   <p class="small muted">Пример: ${esc(s.origin)} → ${s.origin === 'Москва' ? 'Иркутск' : 'Москва'}, Ozon, 1 вещь: ${rub(delivery('ozon', s.origin === 'Москва' ? 'Иркутск' : 'Москва', [{ pid: 'yosh', qty: 1 }])?.full || 0)}.</p></div>
-  <div class="box" style="margin-top:12px"><h3>Возврат</h3><div class="seg" style="margin:8px 0 6px"><button class="${s.returns.mode !== 'law' ? 'on' : ''}" data-rmode="paid">Акции без возврата</button><button class="${s.returns.mode === 'law' ? 'on' : ''}" data-rmode="law">7 дней на всё</button></div>
-  <p class="small muted">${s.returns.mode !== 'law' ? 'Акционные товары без возврата, возврат можно купить отдельно («Гарантия возврата»). Перед запуском проверьте этот вариант у юриста.' : 'Возврат 7 дней на все товары, платная опция — расширенный возврат с доставкой за ваш счёт.'}</p>
+  <div class="box" style="margin-top:12px"><h3>Возврат</h3><div class="seg" style="margin:8px 0 6px"><button class="${s.returns.mode !== 'law' ? 'on' : ''}" data-rmode="paid">Без возврата + гарантия</button><button class="${s.returns.mode === 'law' ? 'on' : ''}" data-rmode="law">7 дней на всё</button></div>
+  <p class="small muted">${s.returns.mode !== 'law' ? 'Возврат не предусмотрен; покупатель может добавить «Гарантию возврата» на весь заказ. Перед запуском проверьте этот вариант у юриста.' : 'Возврат 7 дней на все товары, платная опция — расширенный возврат с доставкой за ваш счёт.'}</p>
   <div class="switch"><span>Предлагать платную опцию при оформлении</span><input type="checkbox" data-set="returns.extOn" ${s.returns.extOn ? 'checked' : ''}></div>
   <div class="two"><div class="field"><label>Цена, ₽</label><input class="inp" type="number" min="0" data-set="returns.extPrice" value="${s.returns.extPrice}"></div><div class="field"><label>Дней на возврат</label><input class="inp" type="number" min="7" data-set="returns.extDays" value="${s.returns.extDays}"></div></div></div>
   <div class="box" style="margin-top:12px"><h3>Бонусы</h3><div class="switch"><span>Бонусная программа включена</span><input type="checkbox" data-set="bonus.on" ${s.bonus.on ? 'checked' : ''}></div>
