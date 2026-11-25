@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '1.2';
+const APP_VERSION = '1.3';
 /* ===== Хранилище (для теста — в браузере; на Netlify заменить на Supabase/Firebase через Store.load/save) ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -618,7 +618,7 @@ function installBanner(always) {
   if (!m) return always && standalone ? '<div class="inst"><img src="icon-192.png" alt=""><div class="f"><b>Приложение установлено</b><span>Вы открыли DESIRE с экрана телефона</span></div></div>' : '';
   if (!always && Date.now() < (+ls.get(DISMISS_KEY) || 0)) return '';
   const txt = {
-    inapp: ['Установите DESIRE на телефон', 'Откройте магазин в браузере — и добавьте иконку на экран'],
+    inapp: ['Установите DESIRE на телефон', 'Сейчас магазин в окне Instagram. Нажмите «Как?» — покажем, где кнопка'],
     prompt: ['Установите приложение DESIRE', 'Иконка на экране, магазин открывается в одно касание'],
     ios: ['Добавьте DESIRE на экран «Домой»', 'Магазин будет открываться как приложение'],
     android: ['Добавьте DESIRE на главный экран', 'Магазин будет открываться как приложение']
@@ -630,25 +630,45 @@ const KBD = {
   dots: '<span class="kbd">•••</span>',
   vdots: '<span class="kbd">⋮</span>',
   share: '<span class="kbd"><svg viewBox="0 0 24 24"><path d="M12 15V3M8 7l4-4 4 4"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg></span>',
+  safari: '<span class="kbd" style="color:#1a7cf5"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z" fill="currentColor"/></svg></span>',
   plus: '<span class="kbd"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8M8 12h8"/></svg></span>'
 };
+// Схема встроенного окна Instagram: значок Safari внизу справа
+const IG_WINDOW = `<svg viewBox="0 0 300 230" role="img" aria-label="Встроенное окно Instagram: значок Safari внизу справа" style="width:100%;max-width:340px;display:block;margin:6px auto 2px">
+  <rect x="40" y="6" width="220" height="218" rx="22" fill="var(--card)" stroke="var(--line)" stroke-width="2"/>
+  <rect x="52" y="20" width="196" height="26" rx="8" fill="var(--fill)"/>
+  <path d="M62 29l8 8M70 29l-8 8" stroke="var(--muted)" stroke-width="2" stroke-linecap="round"/>
+  <text x="150" y="37" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="-apple-system,Inter,sans-serif">desire-shop</text>
+  <g fill="var(--muted)"><circle cx="226" cy="33" r="2"/><circle cx="233" cy="33" r="2"/><circle cx="240" cy="33" r="2"/></g>
+  <rect x="60" y="58" width="180" height="60" rx="10" fill="var(--beige)"/>
+  <rect x="60" y="126" width="120" height="8" rx="4" fill="var(--fill)"/><rect x="60" y="140" width="150" height="8" rx="4" fill="var(--fill)"/>
+  <line x1="40" y1="172" x2="260" y2="172" stroke="var(--line)" stroke-width="2"/>
+  <path d="M70 191l-7 7 7 7M100 191l7 7-7 7" stroke="var(--muted)" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M150 203v-14M145 193l5-5 5 5M142 196h-2v12h20v-12h-2" stroke="var(--muted)" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="222" cy="198" r="17" fill="none" stroke="#e30000" stroke-width="3"/>
+  <circle cx="222" cy="198" r="10" fill="none" stroke="#1a7cf5" stroke-width="2.2"/><path d="M226 194l-2.5 6-6 2.5 2.5-6z" fill="#1a7cf5"/>
+  <path d="M268 160c18 10 18 30 -22 36" stroke="#e30000" stroke-width="2.5" fill="none" stroke-linecap="round"/><path d="M252 189l-8 7 10 3" stroke="#e30000" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="278" y="150" text-anchor="middle" font-size="12" font-weight="700" fill="#e30000" font-family="-apple-system,Inter,sans-serif">Safari</text>
+</svg>`;
 function openInstallGuide() {
   const link = location.origin + '/';
-  let steps = '', extra = '';
-  if (inApp && isIOS) steps = `<li><div>Нажмите ${KBD.dots} в правом верхнем углу Instagram и выберите <b>«Открыть во внешнем браузере»</b>. Магазин откроется в Safari.</div></li>
-    <li><div>Внизу Safari нажмите ${KBD.share} <b>«Поделиться»</b>.</div></li>
-    <li><div>Пролистайте вниз и выберите ${KBD.plus} <b>«На экран „Домой“»</b>, затем <b>«Добавить»</b>.</div></li>`;
-  else if (inApp) { steps = `<li><div>Нажмите кнопку ниже — магазин откроется в Chrome. Или нажмите ${KBD.vdots} справа вверху и выберите <b>«Открыть в Chrome»</b>.</div></li>
+  let steps = '', extra = '', intro = '';
+  if (inApp && isIOS) { intro = `<div class="note" style="margin:10px 0 4px">Сейчас магазин открыт <b>во всплывающем окне Instagram</b> — это не браузер, из него иконку на экран не добавить. Сначала откройте магазин в Safari.</div>${IG_WINDOW}`;
+    steps = `<li><div>Нажмите значок Safari ${KBD.safari} <b>внизу справа</b> — магазин откроется в браузере Safari.<br><span class="small muted">Нет такого значка? Нажмите ${KBD.dots} <b>вверху справа</b> → «Открыть во внешнем браузере».</span></div></li>
+    <li><div>В Safari нажмите ${KBD.share} <b>«Поделиться»</b>. На новых iPhone она спрятана в кнопке ${KBD.dots} внизу справа.</div></li>
+    <li><div>Выберите ${KBD.plus} <b>«На экран „Домой“»</b> и нажмите <b>«Добавить»</b>. На экране появится иконка DESIRE.</div></li>`; }
+  else if (inApp) { intro = `<div class="note" style="margin:10px 0 4px">Сейчас магазин открыт <b>во всплывающем окне Instagram</b> — это не браузер, из него иконку на экран не добавить. Сначала откройте магазин в браузере.</div>`;
+    steps = `<li><div>Нажмите кнопку ниже — магазин откроется в Chrome. Или нажмите ${KBD.vdots} справа вверху и выберите <b>«Открыть в Chrome»</b>.</div></li>
     <li><div>Chrome предложит <b>«Установить приложение»</b>. Если не предложил — нажмите ${KBD.vdots} и выберите <b>«Добавить на главный экран»</b>.</div></li>`;
     extra = `<a class="btn w" style="margin-top:14px" href="intent://${location.host}/#Intent;scheme=https;package=com.android.chrome;end">Открыть в Chrome</a>`; }
-  else if (isIOS) steps = `<li><div>Внизу Safari нажмите ${KBD.share} <b>«Поделиться»</b>.</div></li>
+  else if (isIOS) steps = `<li><div>Нажмите ${KBD.share} <b>«Поделиться»</b> внизу экрана. На новых iPhone она спрятана в кнопке ${KBD.dots} внизу справа.</div></li>
     <li><div>Пролистайте вниз и выберите ${KBD.plus} <b>«На экран „Домой“»</b>.</div></li>
     <li><div>Нажмите <b>«Добавить»</b> — на экране появится иконка DESIRE.</div></li>`;
   else steps = `<li><div>Нажмите ${KBD.vdots} в правом верхнем углу Chrome.</div></li>
     <li><div>Выберите <b>«Установить приложение»</b> или <b>«Добавить на главный экран»</b>.</div></li>
     <li><div>Подтвердите — на экране появится иконка DESIRE.</div></li>`;
   sheet('Установка на телефон', `<div class="sh-b"><div class="inst" style="margin-top:4px"><img src="icon-192.png" alt=""><div class="f"><b>DESIRE</b><span>${esc(location.host)}</span></div></div>
-    <ol class="steps">${steps}</ol>${extra}
+    ${intro}<ol class="steps">${steps}</ol>${extra}
     <button class="btn w sec" style="margin-top:12px" data-inst="copy">Скопировать ссылку на магазин</button>
     <p class="small muted">Если кнопки не находятся — скопируйте ссылку и вставьте её в адресную строку Safari или Chrome.</p></div>`);
 }
