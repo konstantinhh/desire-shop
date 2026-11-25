@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '1.7';
+const APP_VERSION = '1.7.1';
 /* ===== Хранилище (для теста — в браузере; на Netlify заменить на Supabase/Firebase через Store.load/save) ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};

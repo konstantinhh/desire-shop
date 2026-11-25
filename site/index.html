@@ -121,8 +121,8 @@ textarea.inp{height:auto;min-height:84px;padding:12px 14px;resize:vertical}
 .note{background:var(--beige);border-radius:14px;padding:12px 14px;font-size:14px}
 .empty{text-align:center;padding:60px 20px;color:var(--muted)}
 .empty b{display:block;color:var(--ink);font-size:20px;margin-bottom:6px}
-.toast{position:fixed;left:50%;top:calc(14px + var(--safeT));transform:translate(-50%,-80px);background:var(--btn);color:var(--btnInk);padding:12px 18px;border-radius:14px;z-index:90;font-weight:500;transition:transform .35s;max-width:90vw}
-.toast.show{transform:translate(-50%,0)}
+.toast{position:fixed;left:50%;top:calc(14px + var(--safeT));transform:translate(-50%,calc(-100% - 40px - var(--safeT)));opacity:0;visibility:hidden;pointer-events:none;background:var(--btn);color:var(--btnInk);padding:12px 18px;border-radius:14px;z-index:90;font-weight:500;transition:transform .35s,opacity .35s,visibility 0s .35s;max-width:90vw}
+.toast.show{transform:translate(-50%,0);opacity:1;visibility:visible;transition:transform .35s,opacity .2s}
 .qrbox{background:#fff;border-radius:22px;padding:18px;width:min(300px,80vw);margin:8px auto}
 .qrbox svg,.qrbox img{width:100%;height:auto}
 .st{display:inline-block;font-size:12px;font-weight:600;padding:4px 9px;border-radius:999px;background:var(--fill);white-space:nowrap}
