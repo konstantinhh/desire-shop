@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '1.1';
+const APP_VERSION = '1.2';
 /* ===== Хранилище (для теста — в браузере; на Netlify заменить на Supabase/Firebase через Store.load/save) ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -167,7 +167,7 @@ function viewHome() {
   const news = visible().filter(p => p.isNew || p.cat === 'Костюмы').slice(0, 8);
   const sale = visible().filter(p => oldOf(p)).slice(0, 8);
   const h = ['yosh', 'star'].map(byId).filter(Boolean);
-  return `<section class="hero"><div class="tx"><span class="muted small">Каталог осень–зима 2026</span><b>DESIRE</b><p>Костюмы, свитшоты и базовые вещи, которые носят каждый день. Доставка в пункты Ozon и СДЭК по всей России.</p><div><button class="btn" data-go="catalog">Смотреть каталог</button></div></div>
+  return `${installBanner(false)}<section class="hero"><div class="tx"><span class="muted small">Каталог осень–зима 2026</span><b>DESIRE</b><p>Костюмы, свитшоты и базовые вещи, которые носят каждый день. Доставка в пункты Ozon и СДЭК по всей России.</p><div><button class="btn" data-go="catalog">Смотреть каталог</button></div></div>
   <div class="ph">${h.map(p => `<button data-open="${p.id}"><img src="${esc(coverOf(p))}" alt="${esc(p.name)}"></button>`).join('')}</div></section>
   ${camp.map(c => `<div class="promo"><b>${esc(c.title)}</b><span>${esc(c.text)}</span>${c.cat ? `<button class="btn sm sec" data-cat="${esc(c.cat)}">Смотреть</button>` : ''}</div>`).join('')}
   <h2>Категории</h2><div class="chips">${DB.categories.map(c => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
@@ -213,7 +213,7 @@ const STATUS = { awaiting: 'Ждёт подтверждения оплаты', p
 function viewProfile() {
   const mine = SB ? myRemote : DB.orders.filter(o => myOrders.includes(o.id)).reverse();
   const c = DB.settings.contacts;
-  return `<h1>Профиль</h1><h2>Мои заказы</h2>
+  return `<h1>Профиль</h1>${installBanner(true)}<h2>Мои заказы</h2>
   ${mine.length ? `<div class="list">${mine.map(o => `<button class="row" style="width:100%;text-align:left" data-order="${esc(o.id)}"><div class="f"><b>Заказ ${esc(o.id)}</b><div class="muted small">${new Date(o.date).toLocaleDateString('ru-RU')} · ${o.items.reduce((a, i) => a + i.qty, 0)} шт. · ${esc(o.delivery.service === 'ozon' ? 'Ozon' : 'СДЭК')}</div><span class="st ${o.status}" style="margin-top:6px">${STATUS[o.status]}</span></div><span class="price">${rub(o.total)}</span></button>`).join('')}</div>` : '<p class="muted">Здесь появятся ваши заказы.</p>'}
   <h2>Связаться с нами</h2><div class="list">
   <a class="row" href="https://instagram.com/${esc(c.instagram)}"><span class="f">Instagram</span><span class="muted r">@${esc(c.instagram)}</span></a>
@@ -581,6 +581,7 @@ function editProduct(id) {
 /* ===== Общие события ===== */
 document.addEventListener('click', e => {
   const t = e.target.closest('button,[data-go]'); if (!t) return;
+  if (t.dataset.inst) return installAction(t.dataset.inst);
   if (t.dataset.go) return go(t.dataset.go);
   if (t.dataset.fav && !t.closest('.sheet')) return toggleFav(t.dataset.fav);
   if (t.dataset.open && !t.closest('.sheet')) return openProduct(t.dataset.open);
@@ -600,6 +601,64 @@ document.addEventListener('input', e => {
 });
 document.addEventListener('change', e => { if (e.target.id === 'sort') { sortBy = e.target.value; render(); } });
 window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (h && h !== route && TABS.some(x => x[0] === h)) { route = h; render(); } });
+
+/* ===== Установка на телефон (иконка на экране «Домой») ===== */
+const UA = navigator.userAgent || '';
+const isIOS = /iPhone|iPad|iPod/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isAndroid = /Android/i.test(UA);
+const inApp = /Instagram|FBAN|FBAV|FB_IAB/i.test(UA);
+const standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; if (route === 'home' || route === 'profile') render(); });
+window.addEventListener('appinstalled', () => { installEvt = null; toast('DESIRE установлен на телефон'); render(); });
+const installMode = () => standalone ? '' : inApp ? 'inapp' : installEvt ? 'prompt' : isIOS ? 'ios' : isAndroid ? 'android' : '';
+const DISMISS_KEY = 'desire_inst_hide';
+function installBanner(always) {
+  const m = installMode();
+  if (!m) return always && standalone ? '<div class="inst"><img src="icon-192.png" alt=""><div class="f"><b>Приложение установлено</b><span>Вы открыли DESIRE с экрана телефона</span></div></div>' : '';
+  if (!always && Date.now() < (+ls.get(DISMISS_KEY) || 0)) return '';
+  const txt = {
+    inapp: ['Установите DESIRE на телефон', 'Откройте магазин в браузере — и добавьте иконку на экран'],
+    prompt: ['Установите приложение DESIRE', 'Иконка на экране, магазин открывается в одно касание'],
+    ios: ['Добавьте DESIRE на экран «Домой»', 'Магазин будет открываться как приложение'],
+    android: ['Добавьте DESIRE на главный экран', 'Магазин будет открываться как приложение']
+  }[m];
+  const btn = m === 'prompt' ? '<button class="btn sm" data-inst="go">Установить</button>' : '<button class="btn sm" data-inst="guide">Как?</button>';
+  return `<div class="inst"><img src="icon-192.png" alt=""><div class="f"><b>${txt[0]}</b><span>${txt[1]}</span></div>${btn}${always ? '' : `<button class="icon" data-inst="hide" aria-label="Скрыть" style="width:36px;height:36px">${svg('close')}</button>`}</div>`;
+}
+const KBD = {
+  dots: '<span class="kbd">•••</span>',
+  vdots: '<span class="kbd">⋮</span>',
+  share: '<span class="kbd"><svg viewBox="0 0 24 24"><path d="M12 15V3M8 7l4-4 4 4"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg></span>',
+  plus: '<span class="kbd"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8M8 12h8"/></svg></span>'
+};
+function openInstallGuide() {
+  const link = location.origin + '/';
+  let steps = '', extra = '';
+  if (inApp && isIOS) steps = `<li><div>Нажмите ${KBD.dots} в правом верхнем углу Instagram и выберите <b>«Открыть во внешнем браузере»</b>. Магазин откроется в Safari.</div></li>
+    <li><div>Внизу Safari нажмите ${KBD.share} <b>«Поделиться»</b>.</div></li>
+    <li><div>Пролистайте вниз и выберите ${KBD.plus} <b>«На экран „Домой“»</b>, затем <b>«Добавить»</b>.</div></li>`;
+  else if (inApp) { steps = `<li><div>Нажмите кнопку ниже — магазин откроется в Chrome. Или нажмите ${KBD.vdots} справа вверху и выберите <b>«Открыть в Chrome»</b>.</div></li>
+    <li><div>Chrome предложит <b>«Установить приложение»</b>. Если не предложил — нажмите ${KBD.vdots} и выберите <b>«Добавить на главный экран»</b>.</div></li>`;
+    extra = `<a class="btn w" style="margin-top:14px" href="intent://${location.host}/#Intent;scheme=https;package=com.android.chrome;end">Открыть в Chrome</a>`; }
+  else if (isIOS) steps = `<li><div>Внизу Safari нажмите ${KBD.share} <b>«Поделиться»</b>.</div></li>
+    <li><div>Пролистайте вниз и выберите ${KBD.plus} <b>«На экран „Домой“»</b>.</div></li>
+    <li><div>Нажмите <b>«Добавить»</b> — на экране появится иконка DESIRE.</div></li>`;
+  else steps = `<li><div>Нажмите ${KBD.vdots} в правом верхнем углу Chrome.</div></li>
+    <li><div>Выберите <b>«Установить приложение»</b> или <b>«Добавить на главный экран»</b>.</div></li>
+    <li><div>Подтвердите — на экране появится иконка DESIRE.</div></li>`;
+  sheet('Установка на телефон', `<div class="sh-b"><div class="inst" style="margin-top:4px"><img src="icon-192.png" alt=""><div class="f"><b>DESIRE</b><span>${esc(location.host)}</span></div></div>
+    <ol class="steps">${steps}</ol>${extra}
+    <button class="btn w sec" style="margin-top:12px" data-inst="copy">Скопировать ссылку на магазин</button>
+    <p class="small muted">Если кнопки не находятся — скопируйте ссылку и вставьте её в адресную строку Safari или Chrome.</p></div>`);
+}
+async function installAction(a) {
+  if (a === 'guide') return openInstallGuide();
+  if (a === 'hide') { ls.set(DISMISS_KEY, Date.now() + 14 * 864e5); return render(); }
+  if (a === 'copy') { try { await navigator.clipboard.writeText(location.origin + '/'); toast('Ссылка скопирована'); } catch { toast(location.origin + '/'); } return; }
+  if (a === 'go' && installEvt) { installEvt.prompt(); try { await installEvt.userChoice; } catch {} installEvt = null; render(); }
+}
+if ('serviceWorker' in navigator && location.protocol === 'https:' && window.top === window.self) { try { navigator.serviceWorker.register('/sw.js').catch(() => {}); } catch {} }
 if (/netlify\.app$/.test(location.hostname)) document.body.classList.add('nf');
 const h0 = location.hash.slice(1); if (TABS.some(x => x[0] === h0)) route = h0;
 render();
