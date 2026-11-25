@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '1.5';
+const APP_VERSION = '1.6';
 /* ===== Хранилище (для теста — в браузере; на Netlify заменить на Supabase/Firebase через Store.load/save) ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -194,16 +194,24 @@ function openContact(text) {
     <a class="row" href="https://instagram.com/${esc(c.instagram)}"><span class="f">Instagram</span><span class="muted r">@${esc(c.instagram)}</span></a></div>
     <p class="small muted">Telegram: @${esc(String(c.managerTg || '').replace(/^@/, ''))} · WhatsApp: +${esc((c.whatsapp || '').replace(/\D/g, ''))}</p></div>`);
 }
-/* ===== Возврат и обмен ===== */
+/* ===== Возврат и обмен =====
+   mode 'paid': акционные товары без возврата, возврат можно купить отдельно («Гарантия возврата»).
+   mode 'law':  возврат 7 дней на всё, платная опция — расширенный возврат. Переключается в Настройках. */
+const paidMode = () => DB.settings.returns.mode !== 'law';
+const isSale = p => !!(p && oldOf(p));
+const cartHasSale = () => cartItems().some(i => isSale(byId(i.pid)));
+const optName = () => paidMode() ? 'Гарантия возврата' : 'Возврат без забот';
+const optText = () => paidMode() ? 'Акционные вещи можно будет вернуть в течение 7 дней, как обычные.' : `${DB.settings.returns.extDays} дней на возврат вместо 7, обратную доставку оплачиваем мы. Для всех вещей в заказе, включая акционные.`;
 function openReturns() {
   const r = DB.settings.returns, c = DB.settings.contacts;
   sheet('Возврат и обмен', `<div class="sh-b">
-    <div class="note" style="margin-top:4px"><b>7 дней на возврат</b> — с момента получения заказа. Касается всех вещей, в том числе купленных по акции.</div>
+    ${paidMode() ? `<div class="note" style="margin-top:4px"><b>7 дней на возврат</b> — с момента получения заказа, для вещей по обычной цене.</div>
+    <div class="note" style="margin-top:8px"><b>Товары по акции возврату не подлежат</b> — поэтому на них такая цена. Хотите иметь возможность вернуть акционную вещь — добавьте при оформлении <b>«Гарантию возврата» за ${rub(r.extPrice)}</b>.</div>` : `<div class="note" style="margin-top:4px"><b>7 дней на возврат</b> — с момента получения заказа. Касается всех вещей, в том числе купленных по акции.</div>`}
     <h3 style="margin-top:16px">Условия</h3>
     <ul class="ul"><li>Вещь не носили, сохранены товарный вид, бирки и ярлыки.</li><li>Обратную доставку оплачивает покупатель.</li><li>Деньги за товар вернём в течение 10 дней после получения заявления — тем же способом, которым вы платили.</li><li>Если вещь с браком — обменяем или вернём деньги, доставку в этом случае оплачиваем мы.</li></ul>
     <h3 style="margin-top:16px">Как вернуть</h3>
     <ol class="steps"><li><div>Напишите нам в Telegram или WhatsApp: номер заказа и какую вещь возвращаете. Пришлём адрес для отправки.</div></li><li><div>Упакуйте вещь и вложите заявление в свободной форме: ФИО, номер заказа, причина, куда вернуть деньги.</div></li><li><div>Отправьте через <b>СДЭК</b> или <b>Почту России</b> и пришлите нам трек-номер.</div></li></ol>
-    ${r.extOn ? `<div class="box" style="margin-top:14px"><h3>Возврат без забот · ${rub(r.extPrice)}</h3><p class="small muted" style="margin:0">Можно добавить при оформлении заказа: <b>${r.extDays} дней</b> на возврат вместо 7, и <b>обратную доставку оплачиваем мы</b>. Действует на все вещи в заказе, включая акционные.</p></div>` : ''}
+    ${r.extOn ? `<div class="box" style="margin-top:14px"><h3>${optName()} · ${rub(r.extPrice)}</h3><p class="small muted" style="margin:0">Добавляется при оформлении заказа. ${optText()}</p></div>` : ''}
     <button class="btn w sec" style="margin-top:14px" data-contact="Здравствуйте! Хочу оформить возврат по заказу №">Написать про возврат</button></div>`);
 }
 
@@ -328,7 +336,7 @@ function openProduct(id) {
       <h3 style="margin-top:18px">Описание</h3><p style="margin:0 0 10px">${esc(p.desc)}</p>
       <div class="list"><div class="row"><span class="f muted">Состав</span><span class="r">${esc(p.comp)}</span></div><div class="row"><span class="f muted">Размер</span><span class="r">${esc(p.sizes.join(', '))}</span></div><div class="row"><span class="f muted">Замеры</span><span class="r">${esc(p.specs)}</span></div></div>
       <h3 style="margin-top:18px">Уход</h3><p style="margin:0 0 10px">${esc(careOf(p))}</p>
-      <p class="small muted" style="margin:0 0 10px">Возврат 7 дней — <button class="lnk" data-returns="1">условия</button></p>
+      ${paidMode() && isSale(p) ? `<div class="note" style="margin-bottom:10px">Товар по акции — без возврата, поэтому такая цена. Возможность возврата можно добавить при оформлении за ${rub(DB.settings.returns.extPrice)}. <button class="lnk" data-returns="1">Условия</button></div>` : `<p class="small muted" style="margin:0 0 10px">Возврат 7 дней — <button class="lnk" data-returns="1">условия</button></p>`}
       ${reviewsHtml(p)}
       ${similar(p)}</div>`);
     };
@@ -381,8 +389,9 @@ function openCheckout() {
     const R = DB.settings.returns, B = DB.settings.bonus;
     const bonusMax = () => bonusOn && B.on ? Math.max(0, Math.min(bonusBal, Math.floor((subtotal() - promoDiscount(subtotal())) * B.maxSpendPct / 100))) : 0;
     const bonusUse = () => f.useBonus ? bonusMax() : 0;
-    const careFee = () => R.extOn && f.returnCare ? +R.extPrice || 0 : 0;
-    const xtraHtml = () => `${R.extOn ? `<label class="opt"><input type="checkbox" id="xc" ${f.returnCare ? 'checked' : ''}><span><b>Возврат без забот · ${rub(R.extPrice)}</b><br><span class="small muted">${R.extDays} дней на возврат вместо 7, обратную доставку оплачиваем мы. Для всех вещей в заказе, включая акционные.</span></span></label>` : ''}
+    const optShown = () => R.extOn && (!paidMode() || cartHasSale());
+    const careFee = () => optShown() && f.returnCare ? +R.extPrice || 0 : 0;
+    const xtraHtml = () => `${paidMode() && cartHasSale() ? `<p class="small muted" style="margin:0 0 6px">В корзине есть товары по акции — они без возврата.</p>` : ''}${optShown() ? `<label class="opt"><input type="checkbox" id="xc" ${f.returnCare ? 'checked' : ''}><span><b>${optName()} · ${rub(R.extPrice)}</b><br><span class="small muted">${optText()}</span></span></label>` : ''}
       ${bonusMax() ? `<label class="opt"><input type="checkbox" id="xb" ${f.useBonus ? 'checked' : ''}><span><b>Списать ${rub(bonusMax())} бонусами</b><br><span class="small muted">На счёте ${rub(bonusBal)}, можно оплатить до ${B.maxSpendPct}% заказа</span></span></label>` : ''}`;
     const draw = () => {
       const sub = subtotal(), disc = promoDiscount(sub), d = calc();
@@ -403,7 +412,7 @@ function openCheckout() {
     };
     const dlHtml = d => !f.city ? '' : d ? `<div class="note" style="margin-bottom:12px"><b>${d.cost ? rub(d.cost) : 'Бесплатно'}</b>${d.free ? ` <span class="muted">(${esc(d.free)}, обычно ${rub(d.full)})</span>` : ''} · ${d.days[0]}–${d.days[1]} дн. · ~${d.dist.toLocaleString('ru-RU')} км от склада${d.remote ? '<br>Удалённый регион — включена доплата' : ''}</div>` : `<div class="note" style="margin-bottom:12px">Выберите город из подсказок — так мы рассчитаем доставку</div>`;
     const totHtml = (sub, disc, d) => { const bu = bonusUse(), cf = careFee(), goods = sub - disc - bu; const earn = bonusOn && B.on ? Math.floor(goods * B.earnPct / 100) : 0;
-      return `<div class="sum"><span>Товары</span><span>${rub(sub)}</span></div>${disc ? `<div class="sum sale"><span>Промокод</span><span>−${rub(disc)}</span></div>` : ''}${bu ? `<div class="sum sale"><span>Бонусы</span><span>−${rub(bu)}</span></div>` : ''}${cf ? `<div class="sum"><span>Возврат без забот</span><span>${rub(cf)}</span></div>` : ''}<div class="sum"><span>Доставка</span><span>${d ? (d.cost ? rub(d.cost) : 'Бесплатно') : '—'}</span></div><div class="sum t"><span>К оплате</span><span>${rub(goods + cf + (d ? d.cost : 0))}</span></div>${earn ? `<p class="small" style="margin:8px 0 0;color:var(--green)">+${rub(earn)} бонусами после получения заказа</p>` : ''}`; };
+      return `<div class="sum"><span>Товары</span><span>${rub(sub)}</span></div>${disc ? `<div class="sum sale"><span>Промокод</span><span>−${rub(disc)}</span></div>` : ''}${bu ? `<div class="sum sale"><span>Бонусы</span><span>−${rub(bu)}</span></div>` : ''}${cf ? `<div class="sum"><span>${optName()}</span><span>${rub(cf)}</span></div>` : ''}<div class="sum"><span>Доставка</span><span>${d ? (d.cost ? rub(d.cost) : 'Бесплатно') : '—'}</span></div><div class="sum t"><span>К оплате</span><span>${rub(goods + cf + (d ? d.cost : 0))}</span></div>${earn ? `<p class="small" style="margin:8px 0 0;color:var(--green)">+${rub(earn)} бонусами после получения заказа</p>` : ''}`; };
     const refresh = () => { if (!$('#tot')) return; const d = calc(); $('#dl').innerHTML = dlHtml(d); $('#tot').innerHTML = totHtml(subtotal(), promoDiscount(subtotal()), d); $('#pay').disabled = !(d && f.address.trim().length > 4 && f.name.trim() && phoneOk(f.phone)); ls.set('desire_form', f); };
     draw();
     loadBonus().then(() => { if (api.el.querySelector('#xtra')) { api.el.querySelector('#xtra').innerHTML = xtraHtml(); refresh(); } });
@@ -435,7 +444,7 @@ async function createOrder(f, d, bonusSpent = 0, careFee = 0) {
   const o = { id: 'D-' + n, date: Date.now(), status: 'awaiting', items: items.map(i => { const p = byId(i.pid); return { pid: p.id, name: p.name, color: i.color, size: i.size, qty: i.qty, price: priceOf(p), img: coverOf(p, i.color) }; }),
     subtotal: sub, discount: disc, promo: disc ? promoApplied : '', delivery: { service: f.service, city: f.city, address: f.address, cost: d.cost, dist: d.dist },
     customer: { name: f.name, phone: f.phone, email: f.email }, comment: f.comment, total: sub - disc - bonusSpent + careFee + d.cost, paidClaimed: false,
-    bonusSpent, returnCare: careFee > 0, returnCarePrice: careFee, bonusEarned: 0 };
+    bonusSpent, returnCare: careFee > 0, returnCarePrice: careFee, returnCareName: careFee > 0 ? optName() : '', bonusEarned: 0 };
   if (SB) {
     const { id: _drop, ...payload } = o;
     const { data, error } = await SB.rpc('place_order', bonusOn ? { p_order: payload, p_tokens: myTokens.map(t => t.token) } : { p_order: payload });
@@ -489,7 +498,7 @@ function openOrder(id) {
   <div class="box" style="margin-top:12px"><div class="sum"><span>Доставка ${o.delivery.service === 'ozon' ? 'Ozon' : 'СДЭК'}</span><span>${o.delivery.cost ? rub(o.delivery.cost) : 'Бесплатно'}</span></div><div class="small muted">${esc(o.delivery.city)}, ${esc(o.delivery.address)}</div>
   ${o.discount ? `<div class="sum sale"><span>Промокод ${esc(o.promo)}</span><span>−${rub(o.discount)}</span></div>` : ''}<div class="sum t"><span>Итого</span><span>${rub(o.total)}</span></div></div>
   ${o.bonusSpent ? `<p class="small muted">Оплачено бонусами: ${rub(o.bonusSpent)}</p>` : ''}${o.bonusEarned && o.status === 'done' ? `<p class="small" style="color:var(--green)">Начислено бонусов: ${rub(o.bonusEarned)}</p>` : ''}
-  ${o.returnCare ? `<p class="small muted">Подключён «Возврат без забот»: ${DB.settings.returns.extDays} дней на возврат, обратная доставка за наш счёт.</p>` : ''}
+  ${o.returnCare ? `<p class="small muted">Подключено: «${esc(o.returnCareName || optName())}».</p>` : ''}
   ${o.status === 'done' && reviewsOn ? `<h3 style="margin-top:14px">Оцените покупку</h3><div class="list">${[...new Map(o.items.map(i => [i.pid, i])).values()].map(i => `<div class="row"><span class="f">${esc(i.name)}</span>${reviewedKey(o.id, i.pid) ? '<span class="muted small">Отзыв отправлен</span>' : `<button class="btn sm" data-rev="${esc(i.pid)}">Оставить отзыв</button>`}</div>`).join('')}</div>` : ''}
   ${o.status === 'awaiting' ? '<button class="btn w blue" id="repay" style="margin-top:12px">Показать QR для оплаты</button>' : ''}
   <button class="btn w sec" style="margin-top:10px" data-contact="${esc(`Здравствуйте! Вопрос по заказу ${o.id}.`)}">Вопрос по заказу</button></div>`, api => {
@@ -574,7 +583,7 @@ function admOrders() {
   ${l.length ? `<div class="list">${l.map(o => `<div class="row" style="flex-wrap:wrap"><div class="f" style="flex:1 1 220px"><b>${esc(o.id)}</b> · ${esc(o.customer.name)} · <a href="tel:${esc(o.customer.phone)}">${esc(o.customer.phone)}</a>
   <div class="small muted">${new Date(o.date).toLocaleString('ru-RU')} · ${o.delivery.service === 'ozon' ? 'Ozon' : 'СДЭК'}: ${esc(o.delivery.city)}, ${esc(o.delivery.address)}</div>
   <div class="small">${o.items.map(i => `${esc(i.name)} ${esc(i.color)} ${esc(i.size)} ×${i.qty}`).join('; ')}</div>${o.comment ? `<div class="small muted">«${esc(o.comment)}»</div>` : ''}
-  ${o.returnCare ? `<div class="small"><span class="st paid">Возврат без забот</span></div>` : ''}${o.bonusSpent ? `<div class="small muted">Бонусами: −${rub(o.bonusSpent)}</div>` : ''}${o.bonusEarned ? `<div class="small" style="color:var(--green)">Начислено бонусов: ${rub(o.bonusEarned)}</div>` : ''}
+  ${o.returnCare ? `<div class="small"><span class="st paid">${esc(o.returnCareName || 'Возврат')}</span></div>` : ''}${o.bonusSpent ? `<div class="small muted">Бонусами: −${rub(o.bonusSpent)}</div>` : ''}${o.bonusEarned ? `<div class="small" style="color:var(--green)">Начислено бонусов: ${rub(o.bonusEarned)}</div>` : ''}
   ${o.paidClaimed && o.status === 'awaiting' ? '<div class="small" style="color:var(--accent)">Покупатель нажал «Я оплатил» — проверьте поступление</div>' : ''}</div>
   <span class="price">${rub(o.total)}</span><select class="inp" data-ost="${esc(o.id)}" style="width:auto;height:38px;font-size:14px">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${o.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>`).join('')}</div>` : '<div class="empty"><b>Заказов пока нет</b>Оформите тестовый заказ как покупатель — он появится здесь</div>'}`;
 }
@@ -627,7 +636,9 @@ function admSetup() {
   ${['ozon', 'cdek'].map(k => `<p style="margin:6px 0"><b>${k === 'ozon' ? 'Ozon' : 'СДЭК'}</b></p><div class="two" style="grid-template-columns:repeat(3,minmax(0,1fr))"><div class="field"><label>База, ₽</label><input class="inp" type="number" data-set="${k}.base" value="${s[k].base}"></div><div class="field"><label>За км, ₽</label><input class="inp" type="number" step="0.005" data-set="${k}.perKm" value="${s[k].perKm}"></div><div class="field"><label>Доп. вещь, ₽</label><input class="inp" type="number" data-set="${k}.perItem" value="${s[k].perItem}"></div></div>`).join('')}
   <div class="field"><label for="d2">Доплата за удалённые регионы, ₽</label><input class="inp" id="d2" type="number" data-set="remoteExtra" value="${s.remoteExtra}"></div>
   <p class="small muted">Пример: ${esc(s.origin)} → ${s.origin === 'Москва' ? 'Иркутск' : 'Москва'}, Ozon, 1 вещь: ${rub(delivery('ozon', s.origin === 'Москва' ? 'Иркутск' : 'Москва', [{ pid: 'yosh', qty: 1 }])?.full || 0)}.</p></div>
-  <div class="box" style="margin-top:12px"><h3>Возврат без забот</h3><div class="switch"><span>Предлагать при оформлении</span><input type="checkbox" data-set="returns.extOn" ${s.returns.extOn ? 'checked' : ''}></div>
+  <div class="box" style="margin-top:12px"><h3>Возврат</h3><div class="seg" style="margin:8px 0 6px"><button class="${s.returns.mode !== 'law' ? 'on' : ''}" data-rmode="paid">Акции без возврата</button><button class="${s.returns.mode === 'law' ? 'on' : ''}" data-rmode="law">7 дней на всё</button></div>
+  <p class="small muted">${s.returns.mode !== 'law' ? 'Акционные товары без возврата, возврат можно купить отдельно («Гарантия возврата»). Перед запуском проверьте этот вариант у юриста.' : 'Возврат 7 дней на все товары, платная опция — расширенный возврат с доставкой за ваш счёт.'}</p>
+  <div class="switch"><span>Предлагать платную опцию при оформлении</span><input type="checkbox" data-set="returns.extOn" ${s.returns.extOn ? 'checked' : ''}></div>
   <div class="two"><div class="field"><label>Цена, ₽</label><input class="inp" type="number" min="0" data-set="returns.extPrice" value="${s.returns.extPrice}"></div><div class="field"><label>Дней на возврат</label><input class="inp" type="number" min="7" data-set="returns.extDays" value="${s.returns.extDays}"></div></div></div>
   <div class="box" style="margin-top:12px"><h3>Бонусы</h3><div class="switch"><span>Бонусная программа включена</span><input type="checkbox" data-set="bonus.on" ${s.bonus.on ? 'checked' : ''}></div>
   <div class="two"><div class="field"><label>Начислять, % от заказа</label><input class="inp" type="number" min="0" max="50" data-set="bonus.earnPct" value="${s.bonus.earnPct}"></div><div class="field"><label>Оплатить бонусами до, %</label><input class="inp" type="number" min="0" max="100" data-set="bonus.maxSpendPct" value="${s.bonus.maxSpendPct}"></div></div>
@@ -678,6 +689,7 @@ function bindAdmin() {
       DB.campaigns.push({ id: uid(), title, text: $('#cx').value.trim(), cat, productIds: ids, percent: Math.min(90, percent), active: true }); save(); render(); toast('Акция запущена');
     }
     if (t.dataset.pm) { DB.settings.pay.mode = t.dataset.pm; save(); render(); }
+    if (t.dataset.rmode) { DB.settings.returns.mode = t.dataset.rmode; save(); render(); toast('Режим возврата изменён'); }
     if (t.id === 'reset') confirmBox('Сбросить все данные магазина к исходным? Тестовые заказы будут удалены.', () => { DB = clone(SEED); save(); myOrders = []; ls.set(MK, []); cart = []; saveCart(); render(); toast('Данные сброшены'); });
   };
 }

@@ -70,7 +70,7 @@ window.SEED = (() => {
       remoteExtra: 350,
       pay: { mode: 'requisites', sbpLink: '', name: 'ИП Петров Константин Вячеславович', account: '', bank: '', bic: '', corr: '', inn: '' },
       contacts: { instagram: 'desire_ru_', telegram: 'desire_showroom', group: 'desirestorecatalog', managerTg: 'olga_dorgi', whatsapp: '79041503644' },
-      returns: { extOn: true, extPrice: 500, extDays: 30 },
+      returns: { mode: 'paid', extOn: true, extPrice: 500, extDays: 30 },
       bonus: { on: true, earnPct: 5, maxSpendPct: 30 }
     }
   };
