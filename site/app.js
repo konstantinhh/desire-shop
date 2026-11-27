@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '2.5.1';
+const APP_VERSION = '2.5.2';
 /* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -1098,6 +1098,12 @@ function confirmBox(msg, yes) {
 function resizeImg(file, max = 700, q = .78) {
   return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => { const im = new Image(); im.onload = () => { const k = Math.min(1, max / Math.max(im.width, im.height)); const c = document.createElement('canvas'); c.width = im.width * k; c.height = im.height * k; c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); res(c.toDataURL('image/jpeg', q)); }; im.onerror = rej; im.src = r.result; }; r.onerror = rej; r.readAsDataURL(file); });
 }
+/* Редактор фото по цветам: порядок меняется только внутри своего цвета */
+function photoGroupsHtml(p) {
+  const groups = [...p.colors, ''].map(c => [c, p.photos.map((f, i) => [f, i]).filter(([f]) => (p.colors.includes(f.color) ? f.color : '') === c)]).filter(([c, l]) => l.length || c);
+  return groups.map(([c, l]) => `<div class="phg"><div class="phg-h"><b>${c ? esc(c) : 'Общие фото'}</b><span class="muted small">${l.length} фото</span>${l.length && l[0][1] !== 0 ? `<button class="btn sm sec" data-phcover="${l[0][1]}">Сделать обложкой</button>` : l.length ? '<span class="tag">обложка каталога</span>' : ''}</div>
+    ${l.length ? `<div class="phs">${l.map(([f, i], k) => `<div><img src="${esc(f.src)}" alt=""><button class="x" data-xph="${i}" aria-label="Удалить фото">×</button><span class="mv"><button data-phm="${i}" data-to="${k ? l[k - 1][1] : ''}" ${k ? '' : 'disabled'} aria-label="Левее">‹</button>${k ? `<button data-phm="${i}" data-to="${l[0][1]}" aria-label="Сделать главным для цвета">★</button>` : '<em>главное</em>'}<button data-phm="${i}" data-to="${k < l.length - 1 ? l[k + 1][1] : ''}" data-after="1" ${k < l.length - 1 ? '' : 'disabled'} aria-label="Правее">›</button></span><select data-phc="${i}"><option value="">Общее</option>${p.colors.map(cc => `<option ${cc === f.color ? 'selected' : ''}>${esc(cc)}</option>`).join('')}</select></div>`).join('')}</div>` : '<p class="small muted" style="margin:4px 0 0">Нет фото этого цвета</p>'}</div>`).join('');
+}
 function editProduct(id) {
   const src = id ? byId(id) : { id: '', name: '', cat: DB.categories[0], price: 0, oldPrice: 0, desc: '', comp: '', specs: '', params: [], sizes: ['42–48'], colors: ['Чёрный'], photos: [], stock: {}, hidden: false, freeShip: false, isNew: true, tag: '' };
   const p = clone(src);
@@ -1118,7 +1124,7 @@ function editProduct(id) {
     <div class="switch"><span>Показывать в магазине</span><input type="checkbox" id="e_h" ${p.hidden ? '' : 'checked'}></div>
     <div class="switch"><span>Бесплатная доставка</span><input type="checkbox" id="e_f" ${p.freeShip ? 'checked' : ''}></div>
     <div class="switch"><span>Метка «Новинка»</span><input type="checkbox" id="e_new" ${p.isNew ? 'checked' : ''}></div>
-    <h3 style="margin-top:12px">Фото</h3><div class="phs">${p.photos.map((f, i) => `<div><img src="${esc(f.src)}" alt=""><button class="x" data-xph="${i}" aria-label="Удалить фото">×</button><span class="mv"><button data-phl="${i}" ${i ? '' : 'disabled'} aria-label="Левее">‹</button>${i ? `<button data-ph1="${i}" aria-label="Сделать главным">★</button>` : '<em>главное</em>'}<button data-phr="${i}" ${i < p.photos.length - 1 ? '' : 'disabled'} aria-label="Правее">›</button></span><select data-phc="${i}"><option value="">Общее</option>${p.colors.map(c => `<option ${c === f.color ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>`).join('')}</div>
+    <h3 style="margin-top:12px">Фото</h3><p class="small muted" style="margin-top:0">Фото разложены по цветам. У каждого цвета своё главное фото: ★ — сделать главным. Его видят первым, когда выбирают этот цвет.</p>${photoGroupsHtml(p)}
     <label class="btn sec sm" style="margin-top:10px">Добавить фото<input type="file" accept="image/*" multiple id="e_up" hidden></label>
     <h3 style="margin-top:18px">Остатки</h3><div class="scroll"><table><thead><tr><th>Цвет</th>${p.sizes.map(s => `<th>${esc(s)}</th>`).join('')}</tr></thead><tbody>${p.colors.map(c => `<tr><td>${esc(c)}</td>${p.sizes.map(s => `<td><input class="stk" type="number" min="0" data-ek="${esc(c + '|' + s)}" value="${p.stock[c + '|' + s] ?? 0}"></td>`).join('')}</tr>`).join('')}</tbody></table></div>
     <button class="btn w" id="e_save" style="margin-top:16px">Сохранить</button>${id ? '<button class="btn w red" id="e_del" style="margin-top:6px">Удалить товар</button>' : ''}</div>`);
@@ -1138,10 +1144,11 @@ function editProduct(id) {
     api.el.addEventListener('click', e => {
       const t = e.target.closest('button'); if (!t) return;
       if (t.dataset.xph) { read(); p.photos.splice(+t.dataset.xph, 1); draw(); }
-      if (t.dataset.phl || t.dataset.phr || t.dataset.ph1) {   // порядок фото: первое — обложка в каталоге
-        read(); const i = +(t.dataset.phl || t.dataset.phr || t.dataset.ph1), j = t.dataset.ph1 ? 0 : t.dataset.phl ? i - 1 : i + 1;
-        if (j >= 0 && j < p.photos.length) { const [f] = p.photos.splice(i, 1); p.photos.splice(j, 0, f); draw(); }
+      if (t.dataset.phm && t.dataset.to !== '') {   // перестановка внутри цвета: ставим фото перед (или после) соседним фото того же цвета
+        read(); const i = +t.dataset.phm, to = +t.dataset.to, f = p.photos[i], target = p.photos[to];
+        p.photos.splice(i, 1); const at = p.photos.indexOf(target) + (t.dataset.after ? 1 : 0); p.photos.splice(at, 0, f); draw();
       }
+      if (t.dataset.phcover) { read(); const [f] = p.photos.splice(+t.dataset.phcover, 1); p.photos.unshift(f); draw(); }
       if (t.id === 'e_padd') { read(); (p.params ||= []).push({ n: '', v: '' }); draw(); api.el.querySelector(`[data-pn="${p.params.length - 1}"]`)?.focus(); }
       if (t.dataset.pdel) { read(); p.params.splice(+t.dataset.pdel, 1); draw(); }
       if (t.id === 'e_save') {
