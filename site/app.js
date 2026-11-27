@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '2.2';
+const APP_VERSION = '2.2.1';
 /* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -648,6 +648,13 @@ function qrPayload(o) {
   const s = ['ST00012', 'Name=' + p.name, 'PersonalAcc=' + (p.account || '00000000000000000000'), 'BankName=' + (p.bank || 'ТЕСТОВЫЙ БАНК'), 'BIC=' + (p.bic || '000000000'), 'CorrespAcc=' + (p.corr || '0'), p.inn ? 'PayeeINN=' + p.inn : '', 'Sum=' + Math.round(o.total * 100), 'Purpose=Оплата заказа ' + o.id].filter(Boolean).join('|');
   return { text: s, link: '', demo: !ok };
 }
+/* Банки СБП: на iPhone ссылка https://qr.nspk.ru не открывает приложение банка (сертификат Минцифры не доверен в Safari),
+   поэтому открываем приложение выбранного банка напрямую по его схеме bankXXXXXXXXXX:// — так делает виджет СБП. */
+const SBP_BANKS = [['100000000111', 'Сбербанк', '#21a038'], ['100000000004', 'Т-Банк', '#ffdd2d'], ['110000000005', 'ВТБ', '#0a2896'], ['100000000008', 'Альфа-Банк', '#ef3124'],
+  ['100000000273', 'Озон Банк', '#005bff'], ['100000000001', 'Газпромбанк', '#02356e'], ['100000000007', 'Райффайзен', '#fee600'], ['100000000013', 'Совкомбанк', '#0b1f35'],
+  ['100000000150', 'Яндекс Банк', '#fc3f1d'], ['100000000259', 'ВБ Банк', '#9b26b6'], ['100000000010', 'ПСБ', '#f26126'], ['100000000017', 'МТС Банк', '#e30611'],
+  ['100000000082', 'Банк ДОМ.РФ', '#1f2b66'], ['100000000025', 'МКБ', '#d2233c'], ['100000000006', 'Ак Барс', '#00843d'], ['100000000032', 'Ренессанс', '#4b2d82']];
+const bankLink = (id, link) => `bank${id}://` + link.replace(/^https:\/\//, '');
 function qrSvg(text) {
   try { qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8']; const q = qrcode(0, 'M'); q.addData(text, 'Byte'); q.make(); return q.createSvgTag({ cellSize: 6, margin: 2, scalable: true }); }
   catch { return '<p>Не удалось построить QR-код</p>'; }
@@ -656,13 +663,19 @@ function openPay(o) {
   const pl = qrPayload(o), mob = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && !!pl.link;
   sheet('Оплата заказа ' + o.id, `<div class="sh-b" style="text-align:center"><p class="muted" style="margin:4px 0">${mob ? 'Нажмите «Оплатить» — откроется приложение вашего банка' : 'Отсканируйте код камерой или в приложении банка'}</p>
   <div style="font-size:34px;font-weight:700;letter-spacing:-.02em">${rub(o.total)}</div>
-  ${mob ? `<a class="btn w" id="payGo" href="${esc(pl.link)}" style="margin:12px 0 6px">Оплатить ${rub(o.total)}</a><p class="small muted" style="margin:14px 0 4px">или отсканируйте QR с другого телефона</p>` : ''}
+  ${mob ? `<button class="btn w" id="payGo" style="margin:12px 0 6px">Оплатить ${rub(o.total)}</button>
+  <div id="banks" hidden style="text-align:left;margin-top:6px"><p class="small muted" style="margin:4px 0 8px;text-align:center">Выберите свой банк</p><div class="list banks">${(() => { const last = ls.get('desire_bank'); const l = [...SBP_BANKS].sort((a, b) => (b[0] === last) - (a[0] === last)); return l.map(([id, n, c]) => `<a class="row" data-bank="${id}" href="${esc(bankLink(id, pl.link))}"><i class="bk" style="background:${c}">${esc(n[0])}</i><span class="f">${esc(n)}</span><span class="muted">›</span></a>`).join(''); })()}
+  ${isAndroid ? `<a class="row" href="${esc(pl.link)}"><i class="bk" style="background:var(--muted)">…</i><span class="f">Другой банк</span><span class="muted">›</span></a>` : ''}</div></div>
+  <p class="small muted" style="margin:14px 0 4px">или отсканируйте QR с другого телефона</p>` : ''}
   <div class="qrbox"${mob ? ' style="max-width:180px;margin:0 auto"' : ''}>${qrSvg(pl.text)}</div>
   ${pl.demo ? '<div class="note" style="text-align:left">Тестовый QR: реквизиты магазина ещё не заполнены в панели сотрудника. Платить по нему не нужно.</div>' : ''}
   ${pl.link && !mob ? `<a class="btn w sec" href="${esc(pl.link)}" style="margin-top:10px">Открыть в приложении банка</a>` : ''}
   ${DB.settings.pay.mode === 'sbp' ? '' : '<p class="small muted">Сумма и назначение платежа подставятся автоматически.</p>'}
   <button class="btn w${mob ? ' sec' : ''}" id="paid" style="margin-top:12px">Я оплатил(а)</button>
   <p class="small muted">Заказ сохранён. Мы проверим поступление и отправим его в течение 1–2 дней.</p></div>`, api => {
+    const pg = api.el.querySelector('#payGo');
+    if (pg) pg.onclick = () => { const b = api.el.querySelector('#banks'); b.hidden = !b.hidden; if (!b.hidden) b.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); };
+    api.el.querySelectorAll('[data-bank]').forEach(a => a.addEventListener('click', () => { ls.set('desire_bank', a.dataset.bank); track('pay_bank', { meta: { bank: a.dataset.bank } }); }));
     api.el.querySelector('#paid').onclick = async () => { track('paid', { val: o.total, meta: { order: o.id } }); if (SB) { await SB.rpc('claim_paid', { p_token: o.token }); o.paidClaimed = true; } else { const x = DB.orders.find(y => y.id === o.id); x.paidClaimed = true; save(); } api.close(); toast('Спасибо! Заказ ' + o.id + ' принят'); go('profile'); if (SB && !notifOn) setTimeout(() => openNotify('order'), 700); };
   });
 }
