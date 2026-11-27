@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '2.5';
+const APP_VERSION = '2.5.1';
 /* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -1112,7 +1112,7 @@ function editProduct(id) {
     <div class="prm">${(p.params || []).map((r, i) => `<div class="prow"><input class="inp" data-pn="${i}" placeholder="Название" value="${esc(r.n)}"><input class="inp" data-pv="${i}" placeholder="Значение" value="${esc(r.v)}"><button class="x" data-pdel="${i}" aria-label="Удалить параметр">×</button></div>`).join('')}</div>
     <button class="btn sec sm" id="e_padd" style="margin:6px 0 4px">+ Добавить параметр</button>
     <label class="row" style="gap:10px;margin:4px 0 8px"><input type="checkbox" id="e_pnote" ${paramsNoteOn(p) ? 'checked' : ''}><span class="f small">Показывать пояснение «Замеры сняты с изделия в разложенном виде, ×2 — ширина…»</span></label>
-    <div class="field"><label for="e_care">Уход (пусто — подставится подсказка по составу)</label><textarea class="inp" id="e_care" placeholder="${esc(defaultCare(p))}">${esc(p.care || '')}</textarea></div>
+    <div class="field"><label for="e_care">Уход (если очистить поле — подставится подсказка по составу)</label><textarea class="inp" id="e_care" rows="3">${esc(careOf(p))}</textarea></div>
     <div class="field"><label for="e_col">Цвета через запятую</label><input class="inp" id="e_col" value="${esc(p.colors.join(', '))}"></div>
     <div class="field"><label for="e_sz">Размеры через запятую</label><input class="inp" id="e_sz" value="${esc(p.sizes.join(', '))}"></div>
     <div class="switch"><span>Показывать в магазине</span><input type="checkbox" id="e_h" ${p.hidden ? '' : 'checked'}></div>
@@ -1124,7 +1124,7 @@ function editProduct(id) {
     <button class="btn w" id="e_save" style="margin-top:16px">Сохранить</button>${id ? '<button class="btn w red" id="e_del" style="margin-top:6px">Удалить товар</button>' : ''}</div>`);
     const read = () => {
       p.name = $('#e_n').value.trim(); p.cat = $('#e_c').value; p.tag = $('#e_t').value.trim(); p.price = +$('#e_p').value || 0; p.oldPrice = +$('#e_o').value || 0;
-      p.desc = $('#e_d').value; p.care = $('#e_care').value.trim(); p.comp = $('#e_m').value; p.paramsNote = $('#e_pnote').checked;
+      p.desc = $('#e_d').value; { const c = $('#e_care').value.trim(); p.care = c === defaultCare(p) ? '' : c; } p.comp = $('#e_m').value; p.paramsNote = $('#e_pnote').checked;
       p.params = [...api.el.querySelectorAll('[data-pn]')].map(x => ({ n: x.value.trim(), v: (api.el.querySelector(`[data-pv="${x.dataset.pn}"]`).value || '').trim() })); p.hidden = !$('#e_h').checked; p.freeShip = $('#e_f').checked; p.isNew = $('#e_new').checked;
       api.el.querySelectorAll('[data-ek]').forEach(x => p.stock[x.dataset.ek] = Math.max(0, parseInt(x.value) || 0));
     };
