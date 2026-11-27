@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '1.8.1';
+const APP_VERSION = '1.8';
 /* ===== Хранилище (для теста — в браузере; на Netlify заменить на Supabase/Firebase через Store.load/save) ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -562,7 +562,7 @@ async function createOrder(f, d, bonusSpent = 0, careFee = 0) {
 /* ===== Оплата по QR ===== */
 function qrPayload(o) {
   const p = DB.settings.pay;
-  if (p.mode === 'sbp' && /^https:\/\//.test(p.sbpLink)) { const u = p.sbpLink.trim().split('?')[0] + `?type=01&sum=${Math.round(o.total * 100)}&cur=RUB`; return { text: u, link: u, demo: false }; }   // сумма в копейках: банк подставляет её сам (проверено в Сбере)
+  if (p.mode === 'sbp' && /^https:\/\//.test(p.sbpLink)) return { text: p.sbpLink, link: p.sbpLink, demo: false };
   const ok = p.account && p.bic && p.bank;
   const s = ['ST00012', 'Name=' + p.name, 'PersonalAcc=' + (p.account || '00000000000000000000'), 'BankName=' + (p.bank || 'ТЕСТОВЫЙ БАНК'), 'BIC=' + (p.bic || '000000000'), 'CorrespAcc=' + (p.corr || '0'), p.inn ? 'PayeeINN=' + p.inn : '', 'Sum=' + Math.round(o.total * 100), 'Purpose=Оплата заказа ' + o.id].filter(Boolean).join('|');
   return { text: s, link: '', demo: !ok };
@@ -578,10 +578,9 @@ function openPay(o) {
   <div class="qrbox">${qrSvg(pl.text)}</div>
   ${pl.demo ? '<div class="note" style="text-align:left">Тестовый QR: реквизиты магазина ещё не заполнены в панели сотрудника. Платить по нему не нужно.</div>' : ''}
   ${pl.link ? `<a class="btn w sec" href="${esc(pl.link)}" style="margin-top:10px">Открыть в приложении банка</a>` : ''}
-  ${DB.settings.pay.mode === 'sbp' ? `<p class="small muted">Сумма ${rub(o.total)} подставится в банке сама. Если кнопка «Оплатить» серая — нажмите на сумму, сотрите последнюю цифру и введите её снова.</p><button class="btn sm sec" id="cpSum">Скопировать сумму</button>` : '<p class="small muted">Сумма и назначение платежа подставятся автоматически.</p>'}
+  ${DB.settings.pay.mode === 'sbp' ? `<p class="small muted">При оплате по ссылке СБП укажите сумму ${rub(o.total)} и номер заказа ${esc(o.id)} в комментарии.</p>` : '<p class="small muted">Сумма и назначение платежа подставятся автоматически.</p>'}
   <button class="btn w" id="paid" style="margin-top:12px">Я оплатил(а)</button>
   <p class="small muted">Заказ сохранён. Мы проверим поступление и отправим его в течение 1–2 дней.</p></div>`, api => {
-    const cp = api.el.querySelector('#cpSum'); if (cp) cp.onclick = () => (navigator.clipboard ? navigator.clipboard.writeText(String(o.total)) : Promise.reject()).then(() => toast('Сумма скопирована'), () => toast('Сумма: ' + o.total));
     api.el.querySelector('#paid').onclick = async () => { track('paid', { val: o.total, meta: { order: o.id } }); if (SB) { await SB.rpc('claim_paid', { p_token: o.token }); o.paidClaimed = true; } else { const x = DB.orders.find(y => y.id === o.id); x.paidClaimed = true; save(); } api.close(); toast('Спасибо! Заказ ' + o.id + ' принят'); go('profile'); };
   });
 }
