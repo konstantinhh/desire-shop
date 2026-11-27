@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '2.6.0';
+const APP_VERSION = '2.6.1';
 /* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
