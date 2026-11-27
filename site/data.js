@@ -75,7 +75,8 @@ window.SEED = (() => {
       returns: { mode: 'paid', extOn: true, extPrice: 500, extDays: 30 },
       bonus: { on: true, earnPct: 5, maxSpendPct: 30 },
       legal: { name: 'ИП Петрова Ольга Владимировна', inn: '381712391524', email: 'konstan1in@bk.ru' },
-      metrikaId: ''
+      metrikaId: '',
+      notify: { statusOn: true, stockOn: true, cartOn: true, cart1Hours: 3, cart2Days: 2, quietFrom: 22, quietTo: 9 }
     }
   };
 })();

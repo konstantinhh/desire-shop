@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '1.9.1';
+const APP_VERSION = '2.0';
 /* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -22,6 +22,14 @@ const CFG = window.DESIRE_CONFIG || {};
 const SB = CFG.supabaseUrl && CFG.supabaseKey && window.supabase ? window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey) : null;
 let loading = !!SB, loadErr = '', myRemote = [], synced = null, syncT;
 let myTokens = ls.get('desire_tokens_v1') || [];
+/* Постоянный анонимный номер устройства: по нему приходят уведомления и напоминания о корзине */
+let DEV = ls.get('desire_dev'); if (!DEV) { DEV = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); ls.set('desire_dev', DEV); }
+let NOTI = { vapid: '', bot: '' }, notifOn = ls.get('desire_notif') || false, cartSyncT;
+const userTz = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; } };
+function syncCart() {
+  if (!SB || !notifOn) return; clearTimeout(cartSyncT);
+  cartSyncT = setTimeout(() => SB.rpc('save_cart', { p_dev: DEV, p_items: cart.map(i => ({ pid: i.pid, color: i.color, size: i.size, qty: i.qty })), p_tz: userTz() }).then(() => {}, () => {}), 2500);
+}
 if (SB) DB = { v: SEED.v, products: [], categories: SEED.categories, promos: [], campaigns: [], orders: [], reviews: [], events: [], wishes: [], settings: clone(SEED.settings) };
 const pubSettings = () => { const s = clone(DB.settings); delete s.pin; return s; };
 const mapJson = arr => Object.fromEntries(arr.map(x => [x.id, JSON.stringify(x)]));
@@ -76,7 +84,7 @@ const save = () => {
   if (SB) { clearTimeout(syncT); syncT = setTimeout(sbSync, 250); return; }
   if (!ls.set(KEY, DB)) toast('Память браузера заполнена — уменьшите количество загруженных фото');
 };
-const saveCart = () => { ls.set(CK, cart); renderTabs(); };
+const saveCart = () => { ls.set(CK, cart); renderTabs(); syncCart(); };
 
 /* ===== Аналитика: анонимные события воронки (без имён и телефонов) ===== */
 const sstore = { get(k) { try { return sessionStorage.getItem(k); } catch { return null; } }, set(k, v) { try { sessionStorage.setItem(k, v); } catch {} } };
@@ -264,10 +272,63 @@ function openWish(p, color, size) {
       if (c.replace(/[^\dA-Za-z]/g, '').length < 4) return toast('Укажите телефон или ник в Telegram');
       ls.set('desire_contact', c);
       const w = { pid: p.id, color, size, contact: c };
-      if (SB) { const { error } = await SB.rpc('add_wish', { p_sid: SID, p_pid: p.id, p_color: color, p_size: size, p_contact: c }); if (error) return toast('Не получилось — попробуйте позже'); }
+      if (SB) { const { error } = await SB.rpc('add_wish', { p_sid: SID, p_pid: p.id, p_color: color, p_size: size, p_contact: c, p_dev: DEV }); if (error) return toast('Не получилось — попробуйте позже'); }
       else { DB.wishes.push({ ...w, id: uid(), ts: Date.now(), status: 'new' }); save(); }
-      track('wish', { pid: p.id, color, size }); api.close(); toast('Сообщим, как только появится');
+      track('wish', { pid: p.id, color, size }); api.close(); toast('Сообщим, как только появится'); if (SB && !notifOn) setTimeout(() => openNotify('wish'), 500);
     };
+  });
+}
+
+/* ===== Уведомления: push в браузер и Telegram ===== */
+async function loadNotiInfo() { if (!SB || NOTI.loaded) return; const { data } = await SB.from('notifier_info').select('vapid,bot').maybeSingle(); NOTI = { ...(data || {}), loaded: true }; }
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const b64ToU8 = b => { const s = atob((b + '='.repeat((4 - b.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(s, c => c.charCodeAt(0)); };
+const tokenList = () => myTokens.map(t => t.token);
+function setNotifOn(v) { notifOn = v; ls.set('desire_notif', v); if (v) { syncCart(); } }
+async function openNotify(from) {
+  if (!SB) return;
+  await loadNotiInfo();
+  const { data: st } = await SB.rpc('notif_status', { p_dev: DEV }); const S = st || { push: false, tg: false, news: true };
+  if ((S.push || S.tg) !== notifOn) setNotifOn(S.push || S.tg);
+  const intro = from === 'order' ? 'Сообщим, когда оплата подтвердится и заказ отправится.' : from === 'wish' ? 'Так мы напишем автоматически, как только вещь появится.' : 'Статусы заказов, «снова в наличии» и новинки — без спама.';
+  const iosNeedsInstall = isIOS && !standalone;
+  sheet('Уведомления', `<div class="sh-b"><p class="muted" style="margin-top:4px">${intro}</p>
+    <div class="list">
+      <div class="row"><span class="f"><b>Telegram</b><div class="small muted">${S.tg ? 'Подключено' : 'Сообщения от бота магазина'}</div></span>${S.tg ? '<button class="btn sm sec" data-noff="tg">Отключить</button>' : `<button class="btn sm" id="n_tg"${NOTI.bot ? '' : ' disabled'}>Подключить</button>`}</div>
+      <div class="row"><span class="f"><b>Уведомления на телефоне</b><div class="small muted">${S.push ? 'Включены на этом устройстве' : iosNeedsInstall ? 'На iPhone — после установки магазина на экран «Домой»' : pushSupported() ? 'Как от обычного приложения' : 'Этот браузер не поддерживает'}</div></span>${S.push ? '<button class="btn sm sec" data-noff="push">Отключить</button>' : iosNeedsInstall ? '<button class="btn sm sec" id="n_inst">Как установить</button>' : `<button class="btn sm" id="n_push"${pushSupported() && NOTI.vapid ? '' : ' disabled'}>Включить</button>`}</div>
+    </div>
+    <label class="row" style="margin-top:10px;gap:10px"><input type="checkbox" id="n_news" ${S.news ? 'checked' : ''}><span class="f">Новинки и акции<div class="small muted">Не чаще пары раз в месяц</div></span></label>
+    <p class="small muted">Мы не передаём ваши данные и не пишем ночью. Подробнее — в <button class="lnk" data-policy="1">политике конфиденциальности</button>.</p></div>`, api => {
+    const news = () => api.el.querySelector('#n_news').checked;
+    const again = () => { api.close(); setTimeout(() => openNotify(from), 320); };
+    api.el.querySelector('#n_news').onchange = async () => { if (notifOn) { await SB.rpc('notif_update', { p_dev: DEV, p_news: news(), p_tokens: tokenList() }); toast('Сохранено'); } };
+    const tgB = api.el.querySelector('#n_tg');
+    if (tgB) tgB.onclick = async () => {
+      const w = window.open('', '_blank');   // открываем окно сразу — иначе браузер заблокирует
+      const { data: code, error } = await SB.rpc('tg_link', { p_dev: DEV, p_tokens: tokenList(), p_news: news() });
+      if (error) { w?.close(); return toast('Не получилось — попробуйте позже'); }
+      const url = `https://t.me/${NOTI.bot}?start=${code}`;
+      if (w) w.location = url; else location.href = url;
+      setNotifOn(true); track('notify', { meta: { ch: 'tg' } });
+      toast('Нажмите «Запустить» в Telegram'); api.close();
+    };
+    const pB = api.el.querySelector('#n_push');
+    if (pB) pB.onclick = async () => {
+      try {
+        const perm = await Notification.requestPermission(); if (perm !== 'granted') return toast('Уведомления запрещены в настройках браузера');
+        const reg = await navigator.serviceWorker.ready;
+        const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(NOTI.vapid) });
+        const { error } = await SB.rpc('subscribe_push', { p_dev: DEV, p_sub: sub.toJSON(), p_tokens: tokenList(), p_news: news() });
+        if (error) throw error;
+        setNotifOn(true); track('notify', { meta: { ch: 'push' } }); toast('Уведомления включены'); again();
+      } catch (e) { toast('Не получилось включить уведомления'); }
+    };
+    const iB = api.el.querySelector('#n_inst'); if (iB) iB.onclick = () => { api.close(); setTimeout(openInstallGuide, 320); };
+    api.el.querySelectorAll('[data-noff]').forEach(b => b.onclick = async () => {
+      const kind = b.dataset.noff;
+      if (kind === 'push') { try { const reg = await navigator.serviceWorker.ready; (await reg.pushManager.getSubscription())?.unsubscribe(); } catch {} }
+      await SB.rpc('notif_off', { p_dev: DEV, p_kind: kind }); toast('Отключено'); again();
+    });
   });
 }
 
@@ -379,7 +440,7 @@ function viewProfile() {
   ${c.group ? `<a class="row" href="${esc(tgLink(c.group))}"><span class="f">Telegram-группа</span><span class="muted r">общение и вопросы</span></a>` : ''}
   <a class="row" href="${esc(tgLink(c.telegram))}"><span class="f">Telegram-канал</span><span class="muted r">новинки и акции</span></a>
   <a class="row" href="https://instagram.com/${esc(c.instagram)}"><span class="f">Instagram</span><span class="muted r">@${esc(c.instagram)}</span></a></div>
-  <h2>Новинки и акции</h2><div class="list"><a class="row" href="${esc(tgLink(c.telegram))}"><span class="f">Подписаться в Telegram</span><span class="muted r">первыми узнавайте о новинках</span></a><div class="row"><span class="f">Уведомления в приложении</span><span class="muted small r">скоро</span></div></div>
+  <h2>Новинки и акции</h2><div class="list"><a class="row" href="${esc(tgLink(c.telegram))}"><span class="f">Подписаться в Telegram</span><span class="muted r">первыми узнавайте о новинках</span></a>${SB ? `<button class="row" style="width:100%;text-align:left" data-notify="1"><span class="f">Уведомления о заказах и новинках</span><span class="muted small r">${notifOn ? 'включены' : 'Telegram или телефон'} ›</span></button>` : ''}</div>
   <h2>Покупателям</h2><div class="list"><div class="row"><span class="f">Доставка</span><span class="muted small r">Ozon и СДЭК, ПВЗ по всей России</span></div><div class="row"><span class="f">Оплата</span><span class="muted small r">По QR-коду через банк</span></div><div class="row"><span class="f">Удалённые регионы</span><span class="muted small r">Камчатка, Сахалин, Калининград, Крым — с доплатой</span></div><button class="row" style="width:100%;text-align:left" data-returns="1"><span class="f">Условия возврата</span><span class="muted small r">подробнее ›</span></button><button class="row" style="width:100%;text-align:left" data-policy="1"><span class="f">Политика конфиденциальности</span><span class="muted small r">›</span></button></div>
   <div style="margin-top:28px;text-align:center"><button class="btn sec" id="staffBtn">${staff ? 'Открыть панель сотрудника' : 'Вход для сотрудников'}</button><p class="small muted" style="margin-top:14px">Версия ${APP_VERSION}</p></div>`;
 }
@@ -537,7 +598,7 @@ async function createOrder(f, d, bonusSpent = 0, careFee = 0) {
   const o = { id: 'D-' + n, date: Date.now(), status: 'awaiting', items: items.map(i => { const p = byId(i.pid); return { pid: p.id, name: p.name, color: i.color, size: i.size, qty: i.qty, price: priceOf(p), basePrice: p.price, img: coverOf(p, i.color) }; }),
     subtotal: sub, discount: disc, promo: disc ? promoApplied : '', delivery: { service: f.service, city: f.city, address: f.address, cost: d.cost, dist: d.dist },
     customer: { name: f.name, phone: f.phone, email: f.email }, comment: f.comment, total: sub - disc - bonusSpent + careFee + d.cost, paidClaimed: false,
-    sid: SID, src: curSrc(), srcFirst: firstSrc?.src || '', bonusSpent, returnCare: careFee > 0, returnCarePrice: careFee, returnCareName: careFee > 0 ? optName() : '', bonusEarned: 0 };
+    sid: SID, dev: DEV, src: curSrc(), srcFirst: firstSrc?.src || '', bonusSpent, returnCare: careFee > 0, returnCarePrice: careFee, returnCareName: careFee > 0 ? optName() : '', bonusEarned: 0 };
   if (SB) {
     const { id: _drop, ...payload } = o;
     const { data, error } = await SB.rpc('place_order', bonusOn ? { p_order: payload, p_tokens: myTokens.map(t => t.token) } : { p_order: payload });
@@ -581,7 +642,7 @@ function openPay(o) {
   ${DB.settings.pay.mode === 'sbp' ? `<p class="small muted">При оплате по ссылке СБП укажите сумму ${rub(o.total)} и номер заказа ${esc(o.id)} в комментарии.</p>` : '<p class="small muted">Сумма и назначение платежа подставятся автоматически.</p>'}
   <button class="btn w" id="paid" style="margin-top:12px">Я оплатил(а)</button>
   <p class="small muted">Заказ сохранён. Мы проверим поступление и отправим его в течение 1–2 дней.</p></div>`, api => {
-    api.el.querySelector('#paid').onclick = async () => { track('paid', { val: o.total, meta: { order: o.id } }); if (SB) { await SB.rpc('claim_paid', { p_token: o.token }); o.paidClaimed = true; } else { const x = DB.orders.find(y => y.id === o.id); x.paidClaimed = true; save(); } api.close(); toast('Спасибо! Заказ ' + o.id + ' принят'); go('profile'); };
+    api.el.querySelector('#paid').onclick = async () => { track('paid', { val: o.total, meta: { order: o.id } }); if (SB) { await SB.rpc('claim_paid', { p_token: o.token }); o.paidClaimed = true; } else { const x = DB.orders.find(y => y.id === o.id); x.paidClaimed = true; save(); } api.close(); toast('Спасибо! Заказ ' + o.id + ' принят'); go('profile'); if (SB && !notifOn) setTimeout(() => openNotify('order'), 700); };
   });
 }
 function openOrder(id) {
@@ -664,12 +725,12 @@ function viewAdmin() {
   const low = DB.products.reduce((a, p) => a + p.colors.reduce((b, c) => b + p.sizes.filter(s => stockOf(p, c, s) <= 1).length, 0), 0);
   const pend = DB.reviews.filter(r => r.status === 'pending').length;
   const nw = DB.wishes.filter(w => w.status !== 'done').length;
-  const T = [['orders', 'Заказы'], ['stats', 'Статистика'], ['wishes', 'Ждут' + (nw ? ` (${nw})` : '')], ['products', 'Товары'], ['stock', 'Остатки'], ['promo', 'Акции'], ['reviews', 'Отзывы' + (pend ? ` (${pend})` : '')], ['setup', 'Настройки']];
+  const T = [['orders', 'Заказы'], ['stats', 'Статистика'], ['wishes', 'Ждут' + (nw ? ` (${nw})` : '')], ...(SB ? [['news', 'Рассылки']] : []), ['products', 'Товары'], ['stock', 'Остатки'], ['promo', 'Акции'], ['reviews', 'Отзывы' + (pend ? ` (${pend})` : '')], ['setup', 'Настройки']];
   return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><h1>Панель магазина</h1><span style="display:flex;gap:8px">${SB ? '<button class="btn sm sec" id="reload">Обновить</button>' : ''}<button class="btn sm sec" id="logout">Выйти</button></span></div>
   <div class="kpis"><div class="kpi"><span class="muted small">Заказы сегодня</span><b>${td.length}</b></div><div class="kpi"><span class="muted small">Выручка сегодня</span><b>${rub(td.reduce((a, o) => a + o.total, 0))}</b></div>
   <div class="kpi"><span class="muted small">Ждут проверки оплаты</span><b>${DB.orders.filter(o => o.status === 'awaiting').length}</b></div><div class="kpi"><span class="muted small">Вариантов с остатком ≤ 1</span><b class="${low ? 'low' : ''}">${low}</b></div></div>
   <div class="seg adm" style="margin:14px 0 16px">${T.map(([k, t]) => `<button class="${adm === k ? 'on' : ''}" data-adm="${k}">${t}</button>`).join('')}</div>
-  <div id="admBody">${({ orders: admOrders, products: admProducts, stock: admStock, promo: admPromo, reviews: admReviews, setup: admSetup, stats: admStats, wishes: admWishes })[adm]()}</div>`;
+  <div id="admBody">${({ orders: admOrders, products: admProducts, stock: admStock, promo: admPromo, reviews: admReviews, setup: admSetup, stats: admStats, wishes: admWishes, news: admNews })[adm]()}</div>`;
 }
 function admOrders() {
   let l = [...DB.orders].reverse(); if (ordF !== 'all') l = l.filter(o => o.status === ordF);
@@ -789,6 +850,48 @@ async function markWish(id) {
   if (SB) { const { error } = await SB.from('wishes').update({ status: 'done' }).eq('id', id); if (error) return toast('Не удалось: ' + error.message); }
   w.status = 'done'; if (!SB) save(); render();
 }
+/* ===== Рассылки и подписчики ===== */
+let newsData = null;
+async function loadNews() {
+  await loadNotiInfo();
+  const [b, s, l] = await Promise.all([SB.from('broadcasts').select('*').order('id', { ascending: false }).limit(30), SB.from('subscribers').select('kind,news'), SB.from('notif_log').select('kind,channel,ok,ts').gte('ts', new Date(Date.now() - 30 * 864e5).toISOString()).limit(5000)]);
+  const { data: info } = await SB.from('notifier_info').select('seen_at,bot').maybeSingle();
+  newsData = { b: b.data || [], subs: s.data || [], log: l.data || [], info: info || {}, err: b.error?.message || s.error?.message };
+  if (route === 'admin' && adm === 'news') render();
+}
+function admNews() {
+  if (!newsData) { setTimeout(loadNews); return '<div class="empty"><b>Загружаем…</b></div>'; }
+  if (newsData.err) return `<div class="note">Рассылки ещё не подключены в базе: запустите обновлённый supabase-setup.sql.<br><span class="small muted">${esc(newsData.err)}</span></div>`;
+  const S = newsData.subs, push = S.filter(x => x.kind === 'push').length, tgc = S.filter(x => x.kind === 'tg').length, news = S.filter(x => x.news).length;
+  const alive = newsData.info.seen_at && Date.now() - Date.parse(newsData.info.seen_at) < 864e5 * 3;
+  const by = {}; newsData.log.forEach(x => { const k = x.kind; (by[k] ||= { ok: 0, fail: 0 })[x.ok ? 'ok' : 'fail']++; });
+  const KN = { status: 'Статусы заказов', stock: 'Снова в наличии', cart1: 'Корзина: 1-е напоминание', cart2: 'Корзина: 2-е напоминание', news: 'Рассылки', staff: 'Сотрудникам' };
+  return `<div class="kpis"><div class="kpi"><span class="muted small">Telegram</span><b>${tgc}</b></div><div class="kpi"><span class="muted small">Push</span><b>${push}</b></div><div class="kpi"><span class="muted small">Согласны на новинки</span><b>${news}</b></div></div>
+  ${alive ? '' : '<div class="note">Сервис уведомлений на сервере не отвечает — сообщения не уходят. Проверьте, что он запущен.</div>'}
+  <div class="box"><h3>Новая рассылка</h3><p class="small muted" style="margin-top:0">Получат ${news} подписчиков, которые согласились на новинки и акции.</p>
+  <div class="field"><label for="n_t">Заголовок</label><input class="inp" id="n_t" maxlength="60" placeholder="Новая коллекция уже в магазине"></div>
+  <div class="field"><label for="n_b">Текст</label><textarea class="inp" id="n_b" rows="3" maxlength="300" placeholder="Тёплые костюмы и пальто — успейте выбрать свой размер"></textarea></div>
+  <div class="field"><label for="n_p">Куда ведёт кнопка</label><select class="inp" id="n_p"><option value="">Главная магазина</option><option value="#catalog">Каталог</option>${DB.products.filter(p => !p.hidden).map(p => `<option value="#p=${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></div>
+  <button class="btn" id="nSend"${news ? '' : ' disabled'}>Отправить</button></div>
+  <h2>Отправлено за 30 дней</h2><div class="box">${Object.keys(by).length ? Object.entries(by).map(([k, v]) => `<div class="sum"><span>${KN[k] || k}</span><span>${v.ok}${v.fail ? ` <em class="muted">· не дошло ${v.fail}</em>` : ''}</span></div>`).join('') : '<p class="small muted">Пока ничего не отправляли</p>'}</div>
+  <h2>История рассылок</h2><div class="list">${newsData.b.map(b => `<div class="row" style="flex-wrap:wrap"><div class="f" style="flex:1 1 200px"><b>${esc(b.title)}</b><div class="small muted">${new Date(b.created_at).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${b.status === 'sent' ? `доставлено ${b.sent}${b.failed ? `, не дошло ${b.failed}` : ''}` : 'отправляется…'}</div><div class="small">${esc(b.body)}</div></div></div>`).join('') || '<div class="empty">Рассылок ещё не было</div>'}</div>`;
+}
+async function sendNews() {
+  const t = $('#n_t').value.trim(), b = $('#n_b').value.trim(), link = $('#n_p').value;
+  if (t.length < 3 || b.length < 5) return toast('Заполните заголовок и текст');
+  const cnt = newsData.subs.filter(x => x.news).length;
+  if (!confirm(`Отправить рассылку «${t}» ${cnt} подписчикам? Отменить после отправки нельзя.`)) return;
+  const { error } = await SB.from('broadcasts').insert({ title: t, body: b, url: location.origin + '/' + link });
+  if (error) return toast('Не удалось: ' + error.message);
+  toast('Рассылка отправляется'); newsData = null; setTimeout(loadNews, 3000); render();
+}
+async function staffTg() {
+  await loadNotiInfo(); if (!NOTI.bot) return toast('Бот ещё не подключён на сервере');
+  const w = window.open('', '_blank');
+  const { data, error } = await SB.rpc('staff_tg_code'); if (error) { w?.close(); return toast('Не удалось: ' + error.message); }
+  const url = `https://t.me/${NOTI.bot}?start=${data}`; if (w) w.location = url; else location.href = url;
+  toast('Нажмите «Запустить» в Telegram');
+}
 function admReviews() {
   if (!reviewsOn) return '<div class="note">Отзывы ещё не подключены в базе. Запустите обновлённый файл supabase-setup.sql в Supabase → SQL Editor.</div>';
   const l = [...DB.reviews].sort((a, b) => (a.status === 'pending' ? -1 : 0) - (b.status === 'pending' ? -1 : 0));
@@ -845,6 +948,14 @@ function admSetup() {
   <div class="box" style="margin-top:12px"><h3>Бонусы</h3><div class="switch"><span>Бонусная программа включена</span><input type="checkbox" data-set="bonus.on" ${s.bonus.on ? 'checked' : ''}></div>
   <div class="two"><div class="field"><label>Начислять, % от заказа</label><input class="inp" type="number" min="0" max="50" data-set="bonus.earnPct" value="${s.bonus.earnPct}"></div><div class="field"><label>Оплатить бонусами до, %</label><input class="inp" type="number" min="0" max="100" data-set="bonus.maxSpendPct" value="${s.bonus.maxSpendPct}"></div></div>
   <p class="small muted">Бонусы начисляются, когда заказу ставится статус «Получен». При отмене заказа списанные бонусы возвращаются.</p></div>
+  ${SB ? `<div class="box" style="margin-top:12px"><h3>Уведомления покупателям</h3>
+  <label class="row" style="gap:10px"><input type="checkbox" data-set="notify.statusOn" ${s.notify.statusOn ? 'checked' : ''}><span class="f">Статус заказа (оплачен, отправлен, получен)</span></label>
+  <label class="row" style="gap:10px"><input type="checkbox" data-set="notify.stockOn" ${s.notify.stockOn ? 'checked' : ''}><span class="f">«Снова в наличии» — автоматически, когда пополняете остаток</span></label>
+  <label class="row" style="gap:10px"><input type="checkbox" data-set="notify.cartOn" ${s.notify.cartOn ? 'checked' : ''}><span class="f">Напоминать о брошенной корзине</span></label>
+  <div class="two"><div class="field"><label>Первое напоминание через, часов</label><input class="inp" type="number" min="1" max="48" data-set="notify.cart1Hours" value="${esc(s.notify.cart1Hours)}"></div><div class="field"><label>Второе через, дней</label><input class="inp" type="number" min="1" max="14" data-set="notify.cart2Days" value="${esc(s.notify.cart2Days)}"></div>
+  <div class="field"><label>Не писать с, ч</label><input class="inp" type="number" min="0" max="23" data-set="notify.quietFrom" value="${esc(s.notify.quietFrom)}"></div><div class="field"><label>до, ч (по времени покупателя)</label><input class="inp" type="number" min="0" max="23" data-set="notify.quietTo" value="${esc(s.notify.quietTo)}"></div></div>
+  <p class="small muted">Напоминания получают только те, кто включил уведомления. Если вещи из корзины раскупили или покупатель уже оформил заказ — не пишем.</p></div>
+  <div class="box" style="margin-top:12px"><h3>Новые заказы — в мой Telegram</h3><p class="small muted" style="margin-top:0">Бот пришлёт сообщение о каждом новом заказе и о нажатии «Я оплатил». Подключите каждый телефон сотрудника отдельно.</p><button class="btn sm" id="staffTg">Подключить Telegram</button></div>` : ''}
   <div class="box" style="margin-top:12px"><h3>Яндекс Метрика и реквизиты</h3><div class="two"><div class="field"><label>Номер счётчика Метрики</label><input class="inp" data-set="metrikaId" inputmode="numeric" placeholder="например, 98765432" value="${esc(s.metrikaId)}"></div>
   <div class="field"><label>Оператор данных (для политики)</label><input class="inp" data-set="legal.name" value="${esc(s.legal.name)}"></div><div class="field"><label>ИНН</label><input class="inp" data-set="legal.inn" value="${esc(s.legal.inn)}"></div><div class="field"><label>Email для запросов по данным</label><input class="inp" data-set="legal.email" value="${esc(s.legal.email)}"></div></div>
   <p class="small muted">Метрика включается только у покупателей, которые приняли cookie.</p></div>
@@ -875,6 +986,8 @@ function bindAdmin() {
     if (t.dataset.of) { ordF = t.dataset.of; render(); }
     if (t.dataset.per) { statPer = +t.dataset.per; statData = null; render(); }
     if (t.dataset.wdone) markWish(t.dataset.wdone);
+    if (t.id === 'staffTg') staffTg();
+    if (t.id === 'nSend') sendNews();
     if (t.id === 'mkLink') { const u = buildUtm(); $('#utmOut').textContent = u; (navigator.clipboard ? navigator.clipboard.writeText(u) : Promise.reject()).then(() => toast('Ссылка скопирована'), () => toast('Скопируйте ссылку ниже')); }
     if (t.dataset.rvs) setReview(t.dataset.rid, t.dataset.rvs);
     if (t.dataset.rvd) confirmBox('Удалить отзыв?', () => setReview(t.dataset.rvd, ''));
@@ -971,6 +1084,7 @@ document.addEventListener('click', e => {
   if (t.dataset.contact !== undefined) return openContact(t.dataset.contact);
   if (t.dataset.returns) return openReturns();
   if (t.dataset.policy) return openPolicy();
+  if (t.dataset.notify) return openNotify();
   if (t.dataset.consent) { if (t.dataset.consent === 'reset') { try { localStorage.removeItem(CONSENT); } catch {} toast('Выберите настройки cookie внизу экрана'); document.querySelectorAll('.sheetbg [data-close]').forEach(b => b.click()); return consentBanner(); } ls.set(CONSENT, t.dataset.consent); document.getElementById('cookie')?.remove(); if (t.dataset.consent === 'all') loadMetrika(); return; }
   if (t.id === 'chatBtn') return openContact('');
   if (t.dataset.go) return go(t.dataset.go);
@@ -1079,6 +1193,17 @@ async function installAction(a) {
 }
 if ('serviceWorker' in navigator && location.protocol === 'https:' && window.top === window.self) { try { navigator.serviceWorker.register('/sw.js').catch(() => {}); } catch {} }
 const h0 = location.hash.slice(1); if (TABS.some(x => x[0] === h0)) route = h0;
+async function deepLink(h) {
+  const m = /^(p|order)=(.+)$/.exec(h || ''); if (!m) return false;
+  const id = decodeURIComponent(m[2]);
+  document.querySelectorAll('.sheetbg').forEach(x => x.remove()); document.body.style.overflow = '';
+  for (let i = 0; i < 40 && loading; i++) await new Promise(r => setTimeout(r, 250));
+  if (m[1] === 'p') { const p = byId(id); history.replaceState(null, '', '#catalog'); route = 'catalog'; render(); if (p) openProduct(p.id); }
+  else { history.replaceState(null, '', '#profile'); route = 'profile'; if (SB && myTokens.length) await loadMine(); render(); openOrder(id); }
+  return true;
+}
+deepLink(h0);
+window.addEventListener('hashchange', () => deepLink(location.hash.slice(1)));
 setTimeout(() => { consentBanner(); loadMetrika(); }, 800);
 if (newSession) track('visit', { meta: { standalone: standalone, ref: (document.referrer || '').slice(0, 80), medium: visitSrc?.medium || '', campaign: visitSrc?.campaign || '' } });
 render();

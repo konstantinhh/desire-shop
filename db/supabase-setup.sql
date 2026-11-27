@@ -199,7 +199,7 @@ begin
          case when jsonb_typeof(e->'meta') = 'object' and length((e->'meta')::text) < 600 then e->'meta' end
   from jsonb_array_elements(p_events) e
   where jsonb_typeof(e) = 'object' and coalesce(e->>'sid', '') <> ''
-    and e->>'type' in ('visit','catalog','product','select','oos','cart_add','cart_view','checkout','contacts','delivery','pay','paid','fav','search','install','wish_open','wish');
+    and e->>'type' in ('visit','catalog','product','select','oos','cart_add','cart_view','checkout','contacts','delivery','pay','paid','fav','search','install','wish_open','wish','notify');
 end $$;
 
 create table if not exists public.wishes (
@@ -230,3 +230,169 @@ grant all on public.wishes to authenticated;
 
 revoke all on function public.track(jsonb), public.add_wish(text, text, text, text, text) from public;
 grant execute on function public.track(jsonb), public.add_wish(text, text, text, text, text) to anon, authenticated;
+
+-- ===== v2.0: уведомления (push и Telegram), брошенные корзины, рассылки =====
+-- dev — постоянный анонимный номер устройства покупателя (хранится в его браузере)
+create table if not exists public.subscribers (
+  id uuid primary key default gen_random_uuid(),
+  dev text not null,
+  kind text not null check (kind in ('push', 'tg')),
+  push jsonb,                    -- подписка браузера (endpoint и ключи)
+  tg_chat bigint,                -- чат в Telegram
+  news boolean not null default true,     -- согласие на новинки и акции
+  tokens uuid[] not null default '{}',    -- секретные токены заказов этого покупателя
+  fails int not null default 0,
+  created_at timestamptz not null default now(),
+  unique (dev, kind)
+);
+create table if not exists public.tg_links (
+  code text primary key, dev text, tokens uuid[] not null default '{}', news boolean not null default true,
+  staff boolean not null default false, created_at timestamptz not null default now()
+);
+create table if not exists public.staff_chats (chat_id bigint primary key, name text, created_at timestamptz not null default now());
+create table if not exists public.carts (
+  dev text primary key, items jsonb not null, tz text, updated_at timestamptz not null default now(),
+  r1 timestamptz, r2 timestamptz        -- когда отправлены 1-е и 2-е напоминания
+);
+create table if not exists public.broadcasts (
+  id bigserial primary key, created_at timestamptz not null default now(),
+  title text not null, body text not null, url text, status text not null default 'new', sent int not null default 0, failed int not null default 0
+);
+create table if not exists public.notif_log (
+  id bigserial primary key, ts timestamptz not null default now(), kind text not null, channel text, ok boolean not null, info text
+);
+create index if not exists notif_log_ts on public.notif_log (ts);
+create table if not exists public.notifier_info (id int primary key default 1, vapid text, bot text, seen_at timestamptz);
+alter table public.wishes add column if not exists dev text;
+
+alter table public.subscribers enable row level security;
+alter table public.tg_links enable row level security;
+alter table public.staff_chats enable row level security;
+alter table public.carts enable row level security;
+alter table public.broadcasts enable row level security;
+alter table public.notif_log enable row level security;
+alter table public.notifier_info enable row level security;
+do $$
+declare t text;
+begin
+  foreach t in array array['subscribers','staff_chats','carts','broadcasts','notif_log'] loop
+    execute format('drop policy if exists "staff" on public.%I', t);
+    execute format('create policy "staff" on public.%I for all to authenticated using (true) with check (true)', t);
+  end loop;
+end $$;
+drop policy if exists "read all" on public.notifier_info;
+create policy "read all" on public.notifier_info for select to anon, authenticated using (true);
+revoke all on public.subscribers, public.tg_links, public.staff_chats, public.carts, public.broadcasts, public.notif_log from anon;
+grant select, delete on public.subscribers, public.staff_chats, public.carts, public.notif_log to authenticated;
+grant select, insert, delete on public.broadcasts to authenticated;
+grant usage on sequence public.broadcasts_id_seq to authenticated;
+grant select on public.notifier_info to anon, authenticated;
+
+-- Подписка браузера на push
+create or replace function public.subscribe_push(p_dev text, p_sub jsonb, p_tokens uuid[] default '{}', p_news boolean default true) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if length(coalesce(p_dev, '')) not between 8 and 40 or coalesce(p_sub->>'endpoint', '') !~ '^https://' or length(p_sub::text) > 2000 then raise exception 'BAD'; end if;
+  insert into subscribers (dev, kind, push, news, tokens) values (p_dev, 'push', p_sub, p_news, coalesce(p_tokens[1:50], '{}'))
+  on conflict (dev, kind) do update set push = excluded.push, news = excluded.news, fails = 0,
+    tokens = (select coalesce(array_agg(distinct t), '{}') from unnest(subscribers.tokens || excluded.tokens) t);
+end $$;
+
+-- Код для привязки Telegram: покупатель открывает t.me/бот?start=код
+create or replace function public.tg_link(p_dev text, p_tokens uuid[] default '{}', p_news boolean default true) returns text
+language plpgsql security definer set search_path = public as $$
+declare c text;
+begin
+  if length(coalesce(p_dev, '')) not between 8 and 40 then raise exception 'BAD'; end if;
+  if (select count(*) from tg_links where dev = p_dev and created_at > now() - interval '1 hour') >= 10 then raise exception 'TOO_MANY'; end if;
+  delete from tg_links where created_at < now() - interval '1 day';
+  c := replace(gen_random_uuid()::text, '-', '');
+  insert into tg_links (code, dev, tokens, news) values (c, p_dev, coalesce(p_tokens[1:50], '{}'), p_news);
+  return c;
+end $$;
+
+-- Код для сотрудника (только после входа в панель)
+create or replace function public.staff_tg_code() returns text
+language plpgsql security definer set search_path = public as $$
+declare c text;
+begin
+  if auth.role() <> 'authenticated' then raise exception 'FORBIDDEN'; end if;
+  c := 'staff' || replace(gen_random_uuid()::text, '-', '');
+  insert into tg_links (code, staff) values (c, true);
+  return c;
+end $$;
+
+create or replace function public.notif_status(p_dev text) returns jsonb
+language sql security definer set search_path = public as $$
+  select jsonb_build_object(
+    'push', exists (select 1 from subscribers where dev = p_dev and kind = 'push'),
+    'tg', exists (select 1 from subscribers where dev = p_dev and kind = 'tg'),
+    'news', coalesce((select bool_or(news) from subscribers where dev = p_dev), true));
+$$;
+
+create or replace function public.notif_update(p_dev text, p_news boolean, p_tokens uuid[] default '{}') returns void
+language sql security definer set search_path = public as $$
+  update subscribers set news = coalesce(p_news, news),
+    tokens = (select coalesce(array_agg(distinct t), '{}') from unnest(tokens || coalesce(p_tokens[1:50], '{}')) t)
+  where dev = p_dev;
+$$;
+
+create or replace function public.notif_off(p_dev text, p_kind text) returns void
+language sql security definer set search_path = public as $$
+  delete from subscribers where dev = p_dev and kind = p_kind;
+$$;
+
+-- Корзина устройства — нужна только для напоминаний о брошенной корзине
+create or replace function public.save_cart(p_dev text, p_items jsonb, p_tz text default null) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if length(coalesce(p_dev, '')) not between 8 and 40 then raise exception 'BAD'; end if;
+  if p_items is null or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then delete from carts where dev = p_dev; return; end if;
+  if jsonb_array_length(p_items) > 30 or length(p_items::text) > 4000 then raise exception 'BAD'; end if;
+  insert into carts (dev, items, tz) values (p_dev, p_items, left(p_tz, 40))
+  on conflict (dev) do update set items = excluded.items, tz = excluded.tz, updated_at = now(), r1 = null, r2 = null
+    where carts.items is distinct from excluded.items;
+end $$;
+
+revoke all on function public.subscribe_push(text, jsonb, uuid[], boolean), public.tg_link(text, uuid[], boolean), public.notif_status(text),
+  public.notif_update(text, boolean, uuid[]), public.notif_off(text, text), public.save_cart(text, jsonb, text), public.staff_tg_code() from public;
+grant execute on function public.subscribe_push(text, jsonb, uuid[], boolean), public.tg_link(text, uuid[], boolean), public.notif_status(text),
+  public.notif_update(text, boolean, uuid[]), public.notif_off(text, text), public.save_cart(text, jsonb, text) to anon, authenticated;
+grant execute on function public.staff_tg_code() to authenticated;
+
+drop function if exists public.add_wish(text, text, text, text, text);
+-- «Сообщить о поступлении» запоминает устройство, чтобы сервис мог написать автоматически
+create or replace function public.add_wish(p_sid text, p_pid text, p_color text, p_size text, p_contact text, p_dev text default null) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if length(regexp_replace(coalesce(p_contact, ''), '[^0-9A-Za-z]', '', 'g')) < 4 then raise exception 'BAD_CONTACT'; end if;
+  if not exists (select 1 from products where id = p_pid) then raise exception 'NO_PRODUCT'; end if;
+  if (select count(*) from wishes where created_at > now() - interval '1 hour' and sid = p_sid) >= 10 then raise exception 'TOO_MANY'; end if;
+  if exists (select 1 from wishes where pid = p_pid and color is not distinct from p_color and size is not distinct from p_size
+             and contact = left(trim(p_contact), 60) and status = 'new') then return; end if;
+  insert into wishes (sid, pid, color, size, contact, dev) values (left(p_sid, 40), p_pid, left(p_color, 60), left(p_size, 30), left(trim(p_contact), 60), left(p_dev, 40));
+end $$;
+revoke all on function public.add_wish(text, text, text, text, text, text) from public;
+grant execute on function public.add_wish(text, text, text, text, text, text) to anon, authenticated;
+
+-- Сигналы для сервиса уведомлений
+create or replace function public.notify_desire() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_table_name = 'orders' then
+    if tg_op = 'INSERT' then perform pg_notify('desire', json_build_object('t', 'order_new', 'id', new.id)::text);
+    else
+      if new.status is distinct from old.status then perform pg_notify('desire', json_build_object('t', 'order_status', 'id', new.id, 'status', new.status)::text); end if;
+      if new.paid_claimed and not old.paid_claimed then perform pg_notify('desire', json_build_object('t', 'order_paid', 'id', new.id)::text); end if;
+    end if;
+  elsif tg_table_name = 'products' then perform pg_notify('desire', json_build_object('t', 'product', 'id', new.id)::text);
+  elsif tg_table_name = 'broadcasts' then perform pg_notify('desire', json_build_object('t', 'broadcast', 'id', new.id)::text);
+  end if;
+  return new;
+end $$;
+drop trigger if exists notify_desire on public.orders;
+create trigger notify_desire after insert or update on public.orders for each row execute function public.notify_desire();
+drop trigger if exists notify_desire on public.products;
+create trigger notify_desire after insert or update on public.products for each row execute function public.notify_desire();
+drop trigger if exists notify_desire on public.broadcasts;
+create trigger notify_desire after insert on public.broadcasts for each row execute function public.notify_desire();
