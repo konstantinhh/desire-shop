@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '2.2.1';
+const APP_VERSION = '2.2.2';
 /* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -664,7 +664,7 @@ function openPay(o) {
   sheet('Оплата заказа ' + o.id, `<div class="sh-b" style="text-align:center"><p class="muted" style="margin:4px 0">${mob ? 'Нажмите «Оплатить» — откроется приложение вашего банка' : 'Отсканируйте код камерой или в приложении банка'}</p>
   <div style="font-size:34px;font-weight:700;letter-spacing:-.02em">${rub(o.total)}</div>
   ${mob ? `<button class="btn w" id="payGo" style="margin:12px 0 6px">Оплатить ${rub(o.total)}</button>
-  <div id="banks" hidden style="text-align:left;margin-top:6px"><p class="small muted" style="margin:4px 0 8px;text-align:center">Выберите свой банк</p><div class="list banks">${(() => { const last = ls.get('desire_bank'); const l = [...SBP_BANKS].sort((a, b) => (b[0] === last) - (a[0] === last)); return l.map(([id, n, c]) => `<a class="row" data-bank="${id}" href="${esc(bankLink(id, pl.link))}"><i class="bk" style="background:${c}">${esc(n[0])}</i><span class="f">${esc(n)}</span><span class="muted">›</span></a>`).join(''); })()}
+  <div id="banks" hidden style="text-align:left;margin-top:6px"><p class="small muted" style="margin:4px 0 8px;text-align:center">Выберите свой банк</p><div class="list banks">${(() => { const last = ls.get('desire_bank'); const l = [...SBP_BANKS].sort((a, b) => (b[0] === last) - (a[0] === last)); return l.map(([id, n, c]) => `<a class="row" data-bank="${id}" href="${esc(bankLink(id, pl.link))}"><i class="bk" style="background:${c}">${esc(n[0])}<img src="img/banks/bank${id}.png" alt="" loading="lazy" onerror="this.remove()"></i><span class="f">${esc(n)}</span><span class="muted">›</span></a>`).join(''); })()}
   ${isAndroid ? `<a class="row" href="${esc(pl.link)}"><i class="bk" style="background:var(--muted)">…</i><span class="f">Другой банк</span><span class="muted">›</span></a>` : ''}</div></div>
   <p class="small muted" style="margin:14px 0 4px">или отсканируйте QR с другого телефона</p>` : ''}
   <div class="qrbox"${mob ? ' style="max-width:180px;margin:0 auto"' : ''}>${qrSvg(pl.text)}</div>
