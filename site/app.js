@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '2.5.7';
+const APP_VERSION = '2.5.8';
 /* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -795,7 +795,7 @@ function viewAdmin() {
   const grp = admGroupOf(adm), subs = ADM_GROUPS[grp].filter(k => SB || k !== 'news');
   const lbl = k => ADM_SUB[k] + (k === 'wishes' && nw ? ` (${nw})` : k === 'reviews' && pend ? ` (${pend})` : '');
   const awaiting = DB.orders.filter(o => o.status === 'awaiting').length;
-  return `<div class="admhead"><b>Панель</b>${SB ? '<button class="btn sm sec" id="reload">Обновить</button>' : ''}</div>
+  return `<div class="admhead"><b>Панель</b><div style="display:flex;gap:8px">${SB ? '<button class="btn sm sec" id="reload">Обновить</button>' : ''}<button class="btn sm" data-go="home">В магазин ›</button></div></div>
   <div class="kpis mini"><div class="kpi"><span>Сегодня</span><b>${td.length}</b></div><div class="kpi"><span>Выручка</span><b>${rub(td.reduce((a, o) => a + o.total, 0))}</b></div>
   <button class="kpi" data-admto="orders" data-of="awaiting"><span>К проверке</span><b class="${awaiting ? 'low' : ''}">${awaiting}</b></button><button class="kpi" data-admto="stock"><span>Остаток ≤ 1</span><b class="${low ? 'low' : ''}">${low}</b></button></div>
   ${subs.length > 1 ? `<div class="seg" style="margin:12px 0 16px">${subs.map(k => `<button class="${adm === k ? 'on' : ''}" data-adm="${k}">${lbl(k)}</button>`).join('')}</div>` : '<div style="height:12px"></div>'}
