@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '2.4.1';
+const APP_VERSION = '2.5';
 /* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -295,13 +295,15 @@ function openReturns() {
 
 /* ===== Параметры товара (замеры) ===== */
 const paramsOf = p => (p.params || []).filter(r => r && (r.n || '').trim() && (r.v || '').trim());
+// Пояснение про замеры: по галочке в панели; если галочку не трогали — показываем, только когда в замерах есть «×2»
+const paramsNoteOn = p => typeof p.paramsNote === 'boolean' ? p.paramsNote : paramsOf(p).some(r => /[×x]\s*2/i.test(r.v));
 function openParams(p) {
   const rows = paramsOf(p);
   sheet('Параметры · ' + p.name, `<div class="sh-b"><div class="list" style="margin-top:6px">
     <div class="row"><span class="f muted">Размер</span><span class="r">${esc(p.sizes.join(', '))}</span></div>
     ${rows.length ? rows.map(r => `<div class="row"><span class="f muted">${esc(r.n)}</span><span class="r">${esc(r.v)}</span></div>`).join('') : `<div class="row"><span class="f muted">Замеры</span><span class="r">${esc(p.specs || 'уточняйте у нас')}</span></div>`}
     ${p.comp ? `<div class="row"><span class="f muted">Состав</span><span class="r">${esc(p.comp)}</span></div>` : ''}</div>
-    <p class="small muted">Замеры сняты с изделия в разложенном виде. «×2» — ширина изделия: умножьте на 2, чтобы получить обхват.</p>
+    ${paramsNoteOn(p) ? '<p class="small muted">Замеры сняты с изделия в разложенном виде. «×2» — ширина изделия: умножьте на 2, чтобы получить обхват.</p>' : '<div style="height:12px"></div>'}
     <button class="btn sec w sm" data-contact="${esc(`Здравствуйте! Подскажите по размеру: ${p.name}.`)}">${svg('chat')} Подобрать размер с консультантом</button></div>`);
 }
 
@@ -1109,19 +1111,20 @@ function editProduct(id) {
     <h3 style="margin-top:12px">Параметры</h3><p class="small muted" style="margin-top:0">Покупатель видит их по кнопке «Смотреть параметры». Например: Длина — 65 см, Ширина — 60×2 см.</p>
     <div class="prm">${(p.params || []).map((r, i) => `<div class="prow"><input class="inp" data-pn="${i}" placeholder="Название" value="${esc(r.n)}"><input class="inp" data-pv="${i}" placeholder="Значение" value="${esc(r.v)}"><button class="x" data-pdel="${i}" aria-label="Удалить параметр">×</button></div>`).join('')}</div>
     <button class="btn sec sm" id="e_padd" style="margin:6px 0 4px">+ Добавить параметр</button>
+    <label class="row" style="gap:10px;margin:4px 0 8px"><input type="checkbox" id="e_pnote" ${paramsNoteOn(p) ? 'checked' : ''}><span class="f small">Показывать пояснение «Замеры сняты с изделия в разложенном виде, ×2 — ширина…»</span></label>
     <div class="field"><label for="e_care">Уход (пусто — подставится подсказка по составу)</label><textarea class="inp" id="e_care" placeholder="${esc(defaultCare(p))}">${esc(p.care || '')}</textarea></div>
     <div class="field"><label for="e_col">Цвета через запятую</label><input class="inp" id="e_col" value="${esc(p.colors.join(', '))}"></div>
     <div class="field"><label for="e_sz">Размеры через запятую</label><input class="inp" id="e_sz" value="${esc(p.sizes.join(', '))}"></div>
     <div class="switch"><span>Показывать в магазине</span><input type="checkbox" id="e_h" ${p.hidden ? '' : 'checked'}></div>
     <div class="switch"><span>Бесплатная доставка</span><input type="checkbox" id="e_f" ${p.freeShip ? 'checked' : ''}></div>
     <div class="switch"><span>Метка «Новинка»</span><input type="checkbox" id="e_new" ${p.isNew ? 'checked' : ''}></div>
-    <h3 style="margin-top:12px">Фото</h3><div class="phs">${p.photos.map((f, i) => `<div><img src="${esc(f.src)}" alt=""><button class="x" data-xph="${i}" aria-label="Удалить фото">×</button><select data-phc="${i}"><option value="">Общее</option>${p.colors.map(c => `<option ${c === f.color ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>`).join('')}</div>
+    <h3 style="margin-top:12px">Фото</h3><div class="phs">${p.photos.map((f, i) => `<div><img src="${esc(f.src)}" alt=""><button class="x" data-xph="${i}" aria-label="Удалить фото">×</button><span class="mv"><button data-phl="${i}" ${i ? '' : 'disabled'} aria-label="Левее">‹</button>${i ? `<button data-ph1="${i}" aria-label="Сделать главным">★</button>` : '<em>главное</em>'}<button data-phr="${i}" ${i < p.photos.length - 1 ? '' : 'disabled'} aria-label="Правее">›</button></span><select data-phc="${i}"><option value="">Общее</option>${p.colors.map(c => `<option ${c === f.color ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>`).join('')}</div>
     <label class="btn sec sm" style="margin-top:10px">Добавить фото<input type="file" accept="image/*" multiple id="e_up" hidden></label>
     <h3 style="margin-top:18px">Остатки</h3><div class="scroll"><table><thead><tr><th>Цвет</th>${p.sizes.map(s => `<th>${esc(s)}</th>`).join('')}</tr></thead><tbody>${p.colors.map(c => `<tr><td>${esc(c)}</td>${p.sizes.map(s => `<td><input class="stk" type="number" min="0" data-ek="${esc(c + '|' + s)}" value="${p.stock[c + '|' + s] ?? 0}"></td>`).join('')}</tr>`).join('')}</tbody></table></div>
     <button class="btn w" id="e_save" style="margin-top:16px">Сохранить</button>${id ? '<button class="btn w red" id="e_del" style="margin-top:6px">Удалить товар</button>' : ''}</div>`);
     const read = () => {
       p.name = $('#e_n').value.trim(); p.cat = $('#e_c').value; p.tag = $('#e_t').value.trim(); p.price = +$('#e_p').value || 0; p.oldPrice = +$('#e_o').value || 0;
-      p.desc = $('#e_d').value; p.care = $('#e_care').value.trim(); p.comp = $('#e_m').value;
+      p.desc = $('#e_d').value; p.care = $('#e_care').value.trim(); p.comp = $('#e_m').value; p.paramsNote = $('#e_pnote').checked;
       p.params = [...api.el.querySelectorAll('[data-pn]')].map(x => ({ n: x.value.trim(), v: (api.el.querySelector(`[data-pv="${x.dataset.pn}"]`).value || '').trim() })); p.hidden = !$('#e_h').checked; p.freeShip = $('#e_f').checked; p.isNew = $('#e_new').checked;
       api.el.querySelectorAll('[data-ek]').forEach(x => p.stock[x.dataset.ek] = Math.max(0, parseInt(x.value) || 0));
     };
@@ -1135,6 +1138,10 @@ function editProduct(id) {
     api.el.addEventListener('click', e => {
       const t = e.target.closest('button'); if (!t) return;
       if (t.dataset.xph) { read(); p.photos.splice(+t.dataset.xph, 1); draw(); }
+      if (t.dataset.phl || t.dataset.phr || t.dataset.ph1) {   // порядок фото: первое — обложка в каталоге
+        read(); const i = +(t.dataset.phl || t.dataset.phr || t.dataset.ph1), j = t.dataset.ph1 ? 0 : t.dataset.phl ? i - 1 : i + 1;
+        if (j >= 0 && j < p.photos.length) { const [f] = p.photos.splice(i, 1); p.photos.splice(j, 0, f); draw(); }
+      }
       if (t.id === 'e_padd') { read(); (p.params ||= []).push({ n: '', v: '' }); draw(); api.el.querySelector(`[data-pn="${p.params.length - 1}"]`)?.focus(); }
       if (t.dataset.pdel) { read(); p.params.splice(+t.dataset.pdel, 1); draw(); }
       if (t.id === 'e_save') {
