@@ -46,6 +46,8 @@ services:
     env_file: ./notifier.env
     volumes: [notifier_data:/data]
     networks: [supabase]
+    # DNS в Yandex Cloud отдаёт для Telegram только IPv6, а у сервера IPv6 нет — указываем IPv4-адрес API Telegram
+    extra_hosts: ["api.telegram.org:149.154.167.220"]
 networks:
   supabase:
     external: true
