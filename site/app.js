@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '1.7.1';
+const APP_VERSION = '1.8';
 /* ===== Хранилище (для теста — в браузере; на Netlify заменить на Supabase/Firebase через Store.load/save) ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -13,7 +13,7 @@ if (!DB || DB.v !== SEED.v) DB = clone(SEED);
 // Новые настройки подставляются из исходных, если в сохранённых их ещё нет
 const isObj = o => o && typeof o === 'object' && !Array.isArray(o);
 function withDefaults(cur, def) { const out = isObj(cur) ? { ...cur } : {}; for (const k in def) { if (isObj(def[k])) out[k] = withDefaults(out[k], def[k]); else if (out[k] === undefined) out[k] = def[k]; } return out; }
-DB.settings = withDefaults(DB.settings, SEED.settings); if (!DB.reviews) DB.reviews = [];
+DB.settings = withDefaults(DB.settings, SEED.settings); if (!DB.reviews) DB.reviews = []; if (!DB.wishes) DB.wishes = [];
 let reviewsOn = true, bonusOn = true, bonusBal = 0;
 let cart = ls.get(CK) || [], favs = ls.get(FK) || [], myOrders = ls.get(MK) || [];
 let staff = false;
@@ -22,7 +22,7 @@ const CFG = window.DESIRE_CONFIG || {};
 const SB = CFG.supabaseUrl && CFG.supabaseKey && window.supabase ? window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey) : null;
 let loading = !!SB, loadErr = '', myRemote = [], synced = null, syncT;
 let myTokens = ls.get('desire_tokens_v1') || [];
-if (SB) DB = { v: SEED.v, products: [], categories: SEED.categories, promos: [], campaigns: [], orders: [], reviews: [], settings: clone(SEED.settings) };
+if (SB) DB = { v: SEED.v, products: [], categories: SEED.categories, promos: [], campaigns: [], orders: [], reviews: [], events: [], wishes: [], settings: clone(SEED.settings) };
 const pubSettings = () => { const s = clone(DB.settings); delete s.pin; return s; };
 const mapJson = arr => Object.fromEntries(arr.map(x => [x.id, JSON.stringify(x)]));
 const snapOf = () => ({ products: mapJson(DB.products), promos: mapJson(DB.promos), campaigns: mapJson(DB.campaigns), settings: JSON.stringify(pubSettings()), orders: Object.fromEntries(DB.orders.map(o => [o.id, o.status])) });
@@ -77,6 +77,39 @@ const save = () => {
   if (!ls.set(KEY, DB)) toast('Память браузера заполнена — уменьшите количество загруженных фото');
 };
 const saveCart = () => { ls.set(CK, cart); renderTabs(); };
+
+/* ===== Аналитика: анонимные события воронки (без имён и телефонов) ===== */
+const sstore = { get(k) { try { return sessionStorage.getItem(k); } catch { return null; } }, set(k, v) { try { sessionStorage.setItem(k, v); } catch {} } };
+let SID = sstore.get('desire_sid'); const newSession = !SID; if (!SID) { SID = Math.random().toString(36).slice(2, 12) + Date.now().toString(36); sstore.set('desire_sid', SID); }
+function detectSource() {
+  const q = new URLSearchParams(location.search), ref = document.referrer || '', ua = navigator.userAgent || '';
+  const utm = q.get('utm_source');
+  if (utm) return { src: utm.slice(0, 40), medium: (q.get('utm_medium') || '').slice(0, 40), campaign: (q.get('utm_campaign') || '').slice(0, 60) };
+  if (/instagram/i.test(ref) || /Instagram/i.test(ua)) return { src: 'ig', medium: 'social', campaign: '' };
+  if (/t\.me|telegram/i.test(ref) || /Telegram/i.test(ua)) return { src: 'tg', medium: 'social', campaign: '' };
+  if (/yandex|google|bing|mail\.ru/i.test(ref)) return { src: 'search', medium: 'organic', campaign: '' };
+  if (ref && !ref.includes(location.host)) { try { return { src: new URL(ref).hostname.slice(0, 40), medium: 'referral', campaign: '' }; } catch {} }
+  return null;
+}
+const visitSrc = detectSource();
+let firstSrc = ls.get('desire_src');
+if (visitSrc && (!firstSrc || Date.now() - firstSrc.ts > 30 * 864e5)) { firstSrc = { ...visitSrc, ts: Date.now() }; ls.set('desire_src', firstSrc); }
+const curSrc = () => (visitSrc || firstSrc || { src: 'direct' }).src;
+let evQ = [], evT;
+function track(type, d = {}) {
+  const e = { ts: Date.now(), sid: SID, type, src: curSrc(), pid: d.pid || null, color: d.color || null, size: d.size || null, q: d.q || null, val: d.val ?? null, meta: d.meta || null };
+  evQ.push(e); clearTimeout(evT); evT = setTimeout(flushEvents, 4000);
+  try { if (window.ym && DB.settings.metrikaId) ym(+DB.settings.metrikaId, 'reachGoal', type); } catch {}
+}
+let onceSet = new Set(); const trackOnce = (type, d) => { if (onceSet.has(type)) return; onceSet.add(type); track(type, d); };
+async function flushEvents() {
+  if (!evQ.length || staff) { evQ = []; return; }   // действия сотрудников в статистику не попадают
+  const batch = evQ.splice(0, 50);
+  if (typeof SB !== 'undefined' && SB) { try { await SB.rpc('track', { p_events: batch }); } catch {} }
+  else { const all = (ls.get('desire_ev_v1') || []).concat(batch).slice(-5000); ls.set('desire_ev_v1', all); }   // локальный режим: отдельно от базы, чтобы не перезаписать её
+  if (evQ.length) flushEvents();
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushEvents(); });
 
 /* ===== Утилиты ===== */
 const $ = s => document.querySelector(s);
@@ -154,6 +187,7 @@ function renderTabs() {
   $('#tabs').innerHTML = TABS.map(([k, t]) => `<button class="tab ${route === k || (route === 'admin' && k === 'profile') ? 'on' : ''}" data-go="${k}" aria-label="${t}">${svg(k)}${t}${k === 'cart' && n ? `<span class="cnt">${n}</span>` : ''}${k === 'favorites' && favs.length ? `<span class="cnt">${favs.length}</span>` : ''}</button>`).join('');
 }
 function go(r) {
+  if (r !== route) { if (r === 'catalog') track('catalog', { meta: { cat: catFilter || '' } }); if (r === 'cart') track('cart_view'); }
   if (r === 'profile') Promise.all([SB && myTokens.length ? loadMine() : null, loadBonus()]).then(() => route === 'profile' && render());
   if (SB && r === 'admin' && staff) loadRemote(true).then(() => route === 'admin' && render()).catch(() => toast('Не удалось обновить данные'));
   route = r; if (location.hash.slice(1) !== r) history.replaceState(null, '', '#' + r); render(); window.scrollTo({ top: 0 }); }
@@ -214,6 +248,58 @@ function openReturns() {
     <ol class="steps"><li><div>Напишите нам в Telegram или WhatsApp: номер заказа и какую вещь возвращаете. Пришлём адрес для отправки.</div></li><li><div>Упакуйте вещь и вложите заявление в свободной форме: ФИО, номер заказа, причина, куда вернуть деньги.</div></li><li><div>Отправьте через <b>СДЭК</b> или <b>Почту России</b> и пришлите нам трек-номер.</div></li></ol>
     ${r.extOn && !paidMode() ? `<div class="box" style="margin-top:14px"><h3>${optName()} · ${rub(r.extPrice)}</h3><p class="small muted" style="margin:0">Добавляется при оформлении заказа. ${optText()}</p></div>` : ''}
     <button class="btn w sec" style="margin-top:14px" data-contact="Здравствуйте! Хочу оформить возврат по заказу №">Написать про возврат</button></div>`);
+}
+
+/* ===== «Сообщить о поступлении» ===== */
+function openWish(p, color, size) {
+  track('wish_open', { pid: p.id, color, size });
+  const saved = ls.get('desire_contact') || '';
+  sheet('Сообщить о поступлении', `<div class="sh-b"><p style="margin-top:4px"><b>${esc(p.name)}</b> · ${esc(color)} · ${esc(size)}</p>
+    <p class="muted small">Как только появится — напишем вам. Укажите телефон для WhatsApp или ник в Telegram.</p>
+    <div class="field"><label for="w_c">Телефон или @ник в Telegram</label><input class="inp" id="w_c" value="${esc(saved)}" placeholder="+7 900 123-45-67 или @ник" maxlength="60"></div>
+    <button class="btn w" id="w_send">Сообщить мне</button>
+    <p class="small muted">Нажимая, вы соглашаетесь с <button class="lnk" data-policy="1">политикой конфиденциальности</button>.</p></div>`, api => {
+    api.el.querySelector('#w_send').onclick = async () => {
+      const c = api.el.querySelector('#w_c').value.trim();
+      if (c.replace(/[^\dA-Za-z]/g, '').length < 4) return toast('Укажите телефон или ник в Telegram');
+      ls.set('desire_contact', c);
+      const w = { pid: p.id, color, size, contact: c };
+      if (SB) { const { error } = await SB.rpc('add_wish', { p_sid: SID, p_pid: p.id, p_color: color, p_size: size, p_contact: c }); if (error) return toast('Не получилось — попробуйте позже'); }
+      else { DB.wishes.push({ ...w, id: uid(), ts: Date.now(), status: 'new' }); save(); }
+      track('wish', { pid: p.id, color, size }); api.close(); toast('Сообщим, как только появится');
+    };
+  });
+}
+
+/* ===== Cookie, политика конфиденциальности, Яндекс Метрика ===== */
+const CONSENT = 'desire_consent_v1';
+function loadMetrika() {
+  const id = String(DB.settings.metrikaId || '').replace(/\D/g, '');
+  if (!id || window.ym || ls.get(CONSENT) !== 'all') return;
+  (function (m, e, t, r, i, k, a) { m[i] = m[i] || function () { (m[i].a = m[i].a || []).push(arguments); }; m[i].l = 1 * new Date(); k = e.createElement(t); a = e.getElementsByTagName(t)[0]; k.async = 1; k.src = r; a.parentNode.insertBefore(k, a); })(window, document, 'script', 'https://mc.yandex.ru/metrika/tag.js', 'ym');
+  ym(+id, 'init', { clickmap: true, trackLinks: true, accurateTrackBounce: true, webvisor: true });
+}
+function consentBanner() {
+  if (ls.get(CONSENT) || document.getElementById('cookie')) return;
+  const d = document.createElement('div'); d.id = 'cookie'; d.className = 'cookie';
+  d.innerHTML = `<p>Мы используем cookie и сервис Яндекс Метрика, чтобы понимать, как улучшить магазин. <button class="lnk" data-policy="1">Подробнее</button></p><div class="two"><button class="btn sm sec" data-consent="min">Только необходимые</button><button class="btn sm" data-consent="all">Принять</button></div>`;
+  document.body.appendChild(d);
+}
+function openPolicy() {
+  const L = DB.settings.legal, host = location.host;
+  sheet('Политика конфиденциальности', `<div class="sh-b policy">
+  <p class="muted small" style="margin-top:4px">Редакция от 27 ноября 2026 г.</p>
+  <h3>1. Кто обрабатывает данные</h3><p>Оператор персональных данных — ${esc(L.name)}, ИНН ${esc(L.inn)} (далее — «мы»). Политика действует для сайта и приложения магазина DESIRE (${esc(host)}).</p>
+  <h3>2. Какие данные мы получаем</h3><ul class="ul"><li>При оформлении заказа: имя и фамилия, телефон, email (если указали), город и адрес пункта выдачи, комментарий к заказу, состав и сумма заказа.</li>
+  <li>При подписке «Сообщить о поступлении»: телефон или ник в Telegram.</li><li>Отзывы: имя, оценка, текст и фотографии, которые вы прислали.</li>
+  <li>Обезличенные данные о посещении: какие страницы и товары открывали, шаги оформления, источник перехода, тип устройства. Они не содержат имени и телефона.</li>
+  <li>Если вы приняли cookie — данные сервиса Яндекс Метрика (cookie, IP-адрес, сведения о браузере и действиях на сайте).</li></ul>
+  <h3>3. Зачем</h3><ul class="ul"><li>Оформить, оплатить и доставить заказ, связаться с вами по заказу и возврату.</li><li>Начислять бонусы и показывать историю заказов.</li><li>Сообщить о поступлении товара, если вы попросили.</li><li>Улучшать магазин: понимать, какие товары интересны и где оформление неудобно.</li></ul>
+  <h3>4. Основания</h3><p>Исполнение договора купли-продажи, который вы заключаете, оформляя заказ; ваше согласие — для подписки на уведомления, отзывов и аналитических cookie.</p>
+  <h3>5. Кому передаём</h3><p>Только тем, без кого нельзя выполнить заказ: службам доставки (Ozon, СДЭК, Почта России) — имя, телефон и адрес пункта выдачи; банку — данные платежа. ООО «Яндекс» — данные Яндекс Метрики, если вы приняли cookie. Данные хранятся на серверах в России.</p>
+  <h3>6. Сколько храним</h3><p>Данные заказов — пока это нужно для исполнения договора и по требованиям закона (бухгалтерский учёт), затем удаляем. Подписку «Сообщить о поступлении» — до уведомления или вашего отказа.</p>
+  <h3>7. Ваши права</h3><p>Вы можете узнать, какие данные мы храним, попросить исправить или удалить их и отозвать согласие. Напишите на ${esc(L.email)} или в Telegram/WhatsApp магазина — ответим в течение 10 рабочих дней.</p>
+  <h3>8. Cookie</h3><p>Необходимые данные (корзина, избранное, вход) хранятся в браузере вашего телефона. Аналитические cookie Яндекс Метрики включаются только с вашего согласия, его можно изменить: <button class="lnk" data-consent="reset">настроить cookie</button>.</p></div>`);
 }
 
 /* ===== Карточка товара в сетке ===== */
@@ -294,7 +380,7 @@ function viewProfile() {
   <a class="row" href="${esc(tgLink(c.telegram))}"><span class="f">Telegram-канал</span><span class="muted r">новинки и акции</span></a>
   <a class="row" href="https://instagram.com/${esc(c.instagram)}"><span class="f">Instagram</span><span class="muted r">@${esc(c.instagram)}</span></a></div>
   <h2>Новинки и акции</h2><div class="list"><a class="row" href="${esc(tgLink(c.telegram))}"><span class="f">Подписаться в Telegram</span><span class="muted r">первыми узнавайте о новинках</span></a><div class="row"><span class="f">Уведомления в приложении</span><span class="muted small r">скоро</span></div></div>
-  <h2>Покупателям</h2><div class="list"><div class="row"><span class="f">Доставка</span><span class="muted small r">Ozon и СДЭК, ПВЗ по всей России</span></div><div class="row"><span class="f">Оплата</span><span class="muted small r">По QR-коду через банк</span></div><div class="row"><span class="f">Удалённые регионы</span><span class="muted small r">Камчатка, Сахалин, Калининград, Крым — с доплатой</span></div><button class="row" style="width:100%;text-align:left" data-returns="1"><span class="f">Условия возврата</span><span class="muted small r">подробнее ›</span></button></div>
+  <h2>Покупателям</h2><div class="list"><div class="row"><span class="f">Доставка</span><span class="muted small r">Ozon и СДЭК, ПВЗ по всей России</span></div><div class="row"><span class="f">Оплата</span><span class="muted small r">По QR-коду через банк</span></div><div class="row"><span class="f">Удалённые регионы</span><span class="muted small r">Камчатка, Сахалин, Калининград, Крым — с доплатой</span></div><button class="row" style="width:100%;text-align:left" data-returns="1"><span class="f">Условия возврата</span><span class="muted small r">подробнее ›</span></button><button class="row" style="width:100%;text-align:left" data-policy="1"><span class="f">Политика конфиденциальности</span><span class="muted small r">›</span></button></div>
   <div style="margin-top:28px;text-align:center"><button class="btn sec" id="staffBtn">${staff ? 'Открыть панель сотрудника' : 'Вход для сотрудников'}</button><p class="small muted" style="margin-top:14px">Версия ${APP_VERSION}</p></div>`;
 }
 
@@ -316,6 +402,7 @@ function sheet(title, body, onMount) {
 /* ===== Страница товара ===== */
 function openProduct(id) {
   const p = byId(id); if (!p) return;
+  track('product', { pid: p.id });
   let color = p.colors.find(c => p.sizes.some(s => stockOf(p, c, s) > 0)) || p.colors[0], size = p.sizes[0], qty = 1;
   sheet(p.name, '', api => {
     const draw = () => {
@@ -326,9 +413,10 @@ function openProduct(id) {
       <p class="muted small" style="margin:4px 0 0">${esc(p.cat)}${p.tag ? ' · ' + esc(p.tag) : ''}${campaignFor(p) ? ' · ' + esc(campaignFor(p).title) : ''}</p>
       ${(r => r ? `<button class="rlink" data-goreviews="1">${stars(r.avg)} <b>${r.avg.toFixed(1)}</b> <span class="muted">· ${r.n} ${plural(r.n, 'отзыв', 'отзыва', 'отзывов')}</span></button>` : '')(ratingOf(p.id))}
       <h3 style="margin-top:18px">Цвет: <span class="muted">${esc(color)}</span></h3>
-      <div class="sw">${p.colors.map(c => { const has = p.sizes.some(s => stockOf(p, c, s) > 0); return `<button class="swb ${c === color ? 'on' : ''}" data-color="${esc(c)}" ${has ? '' : 'disabled'}><i style="background:${colorCss(c)}"></i>${esc(c)}</button>`; }).join('')}</div>
-      <h3 style="margin-top:16px">Размер</h3><div class="sw">${p.sizes.map(s => `<button class="swb ${s === size ? 'on' : ''}" data-size="${esc(s)}" style="padding-left:14px" ${stockOf(p, color, s) ? '' : 'disabled'}>${esc(s)}</button>`).join('')}</div>
-      <p class="small ${st && st <= 2 ? 'low' : 'muted'}">${st ? (st <= 2 ? `Осталось ${st} шт.` : 'В наличии') : 'Нет в наличии в этом цвете'}</p>
+      <div class="sw">${p.colors.map(c => { const has = p.sizes.some(s => stockOf(p, c, s) > 0); return `<button class="swb ${c === color ? 'on' : ''}" data-color="${esc(c)}" ${has ? '' : 'data-na="1"'}><i style="background:${colorCss(c)}"></i>${esc(c)}</button>`; }).join('')}</div>
+      <h3 style="margin-top:16px">Размер</h3><div class="sw">${p.sizes.map(s => `<button class="swb ${s === size ? 'on' : ''}" data-size="${esc(s)}" style="padding-left:14px" ${stockOf(p, color, s) ? '' : 'data-na="1"'}>${esc(s)}</button>`).join('')}</div>
+      <p class="small ${st && st <= 2 ? 'low' : 'muted'}">${st ? (st <= 2 ? `Осталось ${st} шт.` : 'В наличии') : `Нет в наличии: ${esc(color)}, ${esc(size)}`}</p>
+      ${st ? '' : `<button class="btn w blue sm" data-wish="1" style="margin-bottom:6px">Сообщить о поступлении</button>`}
       <div style="display:flex;gap:10px;align-items:center;margin:14px 0"><div class="qty"><button data-pq="-1" aria-label="Меньше">−</button><span>${qty}</span><button data-pq="1" aria-label="Больше">+</button></div>
       <button class="btn" style="flex:1" id="add" ${st ? '' : 'disabled'}>В корзину</button>
       <button class="icon fav ${favs.includes(p.id) ? 'on' : ''}" style="position:static;background:var(--fill);width:50px;height:50px;border-radius:14px" data-fav="${esc(p.id)}" aria-label="В избранное">${svg('heart')}</button></div>
@@ -344,10 +432,11 @@ function openProduct(id) {
     draw();
     api.el.addEventListener('click', e => {
       const t = e.target.closest('button'); if (!t) return;
-      if (t.dataset.color) { color = t.dataset.color; if (!stockOf(p, color, size)) size = p.sizes.find(s => stockOf(p, color, s)) || size; qty = 1; draw(); }
-      else if (t.dataset.size) { size = t.dataset.size; qty = 1; draw(); }
+      if (t.dataset.color) { color = t.dataset.color; if (!stockOf(p, color, size)) size = p.sizes.find(s => stockOf(p, color, s)) || size; qty = 1; draw(); track(stockOf(p, color, size) ? 'select' : 'oos', { pid: p.id, color, size }); }
+      else if (t.dataset.size) { size = t.dataset.size; qty = 1; draw(); track(stockOf(p, color, size) ? 'select' : 'oos', { pid: p.id, color, size }); }
+      else if (t.dataset.wish) openWish(p, color, size);
       else if (t.dataset.pq) { qty = Math.max(1, Math.min(stockOf(p, color, size) || 1, qty + +t.dataset.pq)); draw(); }
-      else if (t.id === 'add') { if (addToCart(p.id, color, size, qty)) { toast(`${p.name} · ${color} — в корзине`); } }
+      else if (t.id === 'add') { if (addToCart(p.id, color, size, qty)) { toast(`${p.name} · ${color} — в корзине`); track('cart_add', { pid: p.id, color, size, val: priceOf(p) * qty }); } }
       else if (t.dataset.fav) { toggleFav(p.id); draw(); }
       else if (t.dataset.open) { api.close(); setTimeout(() => openProduct(t.dataset.open), 320); }
       else if (t.dataset.goreviews) api.el.querySelector('#reviews')?.scrollIntoView({ behavior: 'smooth' });
@@ -366,7 +455,7 @@ function reviewsHtml(p) {
 }
 function openPhoto(src) { sheet('Фото покупателя', `<div class="sh-b"><img src="${esc(src)}" alt="" style="width:100%;border-radius:16px"></div>`); }
 const similar = p => { const l = visible().filter(x => x.cat === p.cat && x.id !== p.id).slice(0, 4); return l.length ? `<h2>Из этой категории</h2><div class="grid">${l.map(cardHtml).join('')}</div>` : ''; };
-function toggleFav(id) { favs = favs.includes(id) ? favs.filter(x => x !== id) : [...favs, id]; ls.set(FK, favs); toast(favs.includes(id) ? 'Добавлено в избранное' : 'Убрано из избранного'); renderTabs(); if (route === 'favorites' || route === 'home' || route === 'catalog') render(); }
+function toggleFav(id) { favs = favs.includes(id) ? favs.filter(x => x !== id) : [...favs, id]; if (favs.includes(id)) track('fav', { pid: id }); ls.set(FK, favs); toast(favs.includes(id) ? 'Добавлено в избранное' : 'Убрано из избранного'); renderTabs(); if (route === 'favorites' || route === 'home' || route === 'catalog') render(); }
 
 /* ===== Оформление заказа ===== */
 // Телефон: +7 всегда на месте, номер форматируется как +7 900 123-45-67; 8 в начале отбрасывается только у вставленного 11-значного номера
@@ -383,6 +472,7 @@ function fmtPhone(v) {
 }
 const phoneOk = p => String(p || '').replace(/\D/g, '').length === 11;
 function openCheckout() {
+  track('checkout', { val: subtotal() });
   const f = ls.get('desire_form') || { name: '', phone: '', email: '', service: 'ozon', city: '', address: '', comment: '' };
   f.useBonus = false; f.returnCare = false;
   sheet('Оформление', '', api => {
@@ -409,12 +499,14 @@ function openCheckout() {
       <div id="xtra">${xtraHtml()}</div>
       <div class="box" id="tot">${totHtml(sub, disc, d)}</div>
       <button class="btn w blue" id="pay" style="margin-top:14px" ${d && f.address.trim().length > 4 && f.name.trim() && phoneOk(f.phone) ? '' : 'disabled'}>Оплатить по QR-коду</button>
-      <p class="muted small" style="text-align:center">Заполните имя, телефон, город и адрес ПВЗ. Оформляя заказ, вы соглашаетесь с <button class="lnk" data-returns="1">условиями возврата</button>.</p></div>`);
+      <p class="muted small" style="text-align:center">Заполните имя, телефон, город и адрес ПВЗ. Оформляя заказ, вы соглашаетесь с <button class="lnk" data-returns="1">условиями возврата</button> и <button class="lnk" data-policy="1">политикой конфиденциальности</button>.</p></div>`);
     };
     const dlHtml = d => !f.city ? '' : d ? `<div class="note" style="margin-bottom:12px"><b>${d.cost ? rub(d.cost) : 'Бесплатно'}</b>${d.free ? ` <span class="muted">(${esc(d.free)}, обычно ${rub(d.full)})</span>` : ''} · ${d.days[0]}–${d.days[1]} дн. · ~${d.dist.toLocaleString('ru-RU')} км от склада${d.remote ? '<br>Удалённый регион — включена доплата' : ''}</div>` : `<div class="note" style="margin-bottom:12px">Выберите город из подсказок — так мы рассчитаем доставку</div>`;
     const totHtml = (sub, disc, d) => { const bu = bonusUse(), cf = careFee(), goods = sub - disc - bu; const earn = bonusOn && B.on ? Math.floor(goods * B.earnPct / 100) : 0;
       return `<div class="sum"><span>Товары</span><span>${rub(sub)}</span></div>${disc ? `<div class="sum sale"><span>Промокод</span><span>−${rub(disc)}</span></div>` : ''}${bu ? `<div class="sum sale"><span>Бонусы</span><span>−${rub(bu)}</span></div>` : ''}${cf ? `<div class="sum"><span>${optName()}</span><span>${rub(cf)}</span></div>` : ''}<div class="sum"><span>Доставка</span><span>${d ? (d.cost ? rub(d.cost) : 'Бесплатно') : '—'}</span></div><div class="sum t"><span>К оплате</span><span>${rub(goods + cf + (d ? d.cost : 0))}</span></div>${earn ? `<p class="small" style="margin:8px 0 0;color:var(--green)">+${rub(earn)} бонусами после получения заказа</p>` : ''}`; };
-    const refresh = () => { if (!$('#tot')) return; const d = calc(); $('#dl').innerHTML = dlHtml(d); $('#tot').innerHTML = totHtml(subtotal(), promoDiscount(subtotal()), d); $('#pay').disabled = !(d && f.address.trim().length > 4 && f.name.trim() && phoneOk(f.phone)); ls.set('desire_form', f); };
+    const refresh = () => { if (!$('#tot')) return; const d = calc();
+      if (f.name.trim() && phoneOk(f.phone)) trackOnce('contacts', {});
+      if (d && f.address.trim().length > 4) trackOnce('delivery', { meta: { service: f.service, city: f.city } }); $('#dl').innerHTML = dlHtml(d); $('#tot').innerHTML = totHtml(subtotal(), promoDiscount(subtotal()), d); $('#pay').disabled = !(d && f.address.trim().length > 4 && f.name.trim() && phoneOk(f.phone)); ls.set('desire_form', f); };
     draw();
     loadBonus().then(() => { if (api.el.querySelector('#xtra')) { api.el.querySelector('#xtra').innerHTML = xtraHtml(); refresh(); } });
     api.el.addEventListener('focusin', e => { if (e.target.id === 'fp') setTimeout(() => { const L = e.target.value.length; try { e.target.setSelectionRange(L, L); } catch {} }); });
@@ -433,7 +525,7 @@ function openCheckout() {
       const t = e.target.closest('button'); if (!t) return;
       if (t.dataset.svc) { f.service = t.dataset.svc; draw(); refresh(); }
       if (t.dataset.city) { f.city = t.dataset.city; $('#fc').value = f.city; $('#sug').innerHTML = ''; refresh(); $('#fa').focus(); }
-      if (t.id === 'pay') { t.disabled = true; t.textContent = 'Оформляем…'; const o = await createOrder(f, calc(), bonusUse(), careFee()); if (o) { api.close(); setTimeout(() => openPay(o), 320); } else { t.disabled = false; t.textContent = 'Оплатить по QR-коду'; } }
+      if (t.id === 'pay') { track('pay', { val: subtotal() }); t.disabled = true; t.textContent = 'Оформляем…'; const o = await createOrder(f, calc(), bonusUse(), careFee()); if (o) { api.close(); setTimeout(() => openPay(o), 320); } else { t.disabled = false; t.textContent = 'Оплатить по QR-коду'; } }
     });
   });
 }
@@ -442,10 +534,10 @@ async function createOrder(f, d, bonusSpent = 0, careFee = 0) {
   for (const i of items) { const p = byId(i.pid); if (stockOf(p, i.color, i.size) < i.qty) { toast(`${p.name} ${i.color}: осталось ${stockOf(p, i.color, i.size)} шт.`); return null; } }
   const sub = subtotal(), disc = promoDiscount(sub);
   const n = 1001 + DB.orders.length;
-  const o = { id: 'D-' + n, date: Date.now(), status: 'awaiting', items: items.map(i => { const p = byId(i.pid); return { pid: p.id, name: p.name, color: i.color, size: i.size, qty: i.qty, price: priceOf(p), img: coverOf(p, i.color) }; }),
+  const o = { id: 'D-' + n, date: Date.now(), status: 'awaiting', items: items.map(i => { const p = byId(i.pid); return { pid: p.id, name: p.name, color: i.color, size: i.size, qty: i.qty, price: priceOf(p), basePrice: p.price, img: coverOf(p, i.color) }; }),
     subtotal: sub, discount: disc, promo: disc ? promoApplied : '', delivery: { service: f.service, city: f.city, address: f.address, cost: d.cost, dist: d.dist },
     customer: { name: f.name, phone: f.phone, email: f.email }, comment: f.comment, total: sub - disc - bonusSpent + careFee + d.cost, paidClaimed: false,
-    bonusSpent, returnCare: careFee > 0, returnCarePrice: careFee, returnCareName: careFee > 0 ? optName() : '', bonusEarned: 0 };
+    sid: SID, src: curSrc(), srcFirst: firstSrc?.src || '', bonusSpent, returnCare: careFee > 0, returnCarePrice: careFee, returnCareName: careFee > 0 ? optName() : '', bonusEarned: 0 };
   if (SB) {
     const { id: _drop, ...payload } = o;
     const { data, error } = await SB.rpc('place_order', bonusOn ? { p_order: payload, p_tokens: myTokens.map(t => t.token) } : { p_order: payload });
@@ -489,7 +581,7 @@ function openPay(o) {
   ${DB.settings.pay.mode === 'sbp' ? `<p class="small muted">При оплате по ссылке СБП укажите сумму ${rub(o.total)} и номер заказа ${esc(o.id)} в комментарии.</p>` : '<p class="small muted">Сумма и назначение платежа подставятся автоматически.</p>'}
   <button class="btn w" id="paid" style="margin-top:12px">Я оплатил(а)</button>
   <p class="small muted">Заказ сохранён. Мы проверим поступление и отправим его в течение 1–2 дней.</p></div>`, api => {
-    api.el.querySelector('#paid').onclick = async () => { if (SB) { await SB.rpc('claim_paid', { p_token: o.token }); o.paidClaimed = true; } else { const x = DB.orders.find(y => y.id === o.id); x.paidClaimed = true; save(); } api.close(); toast('Спасибо! Заказ ' + o.id + ' принят'); go('profile'); };
+    api.el.querySelector('#paid').onclick = async () => { track('paid', { val: o.total, meta: { order: o.id } }); if (SB) { await SB.rpc('claim_paid', { p_token: o.token }); o.paidClaimed = true; } else { const x = DB.orders.find(y => y.id === o.id); x.paidClaimed = true; save(); } api.close(); toast('Спасибо! Заказ ' + o.id + ' принят'); go('profile'); };
   });
 }
 function openOrder(id) {
@@ -571,12 +663,13 @@ function viewAdmin() {
   const td = DB.orders.filter(o => new Date(o.date).toDateString() === today && o.status !== 'cancelled');
   const low = DB.products.reduce((a, p) => a + p.colors.reduce((b, c) => b + p.sizes.filter(s => stockOf(p, c, s) <= 1).length, 0), 0);
   const pend = DB.reviews.filter(r => r.status === 'pending').length;
-  const T = [['orders', 'Заказы'], ['products', 'Товары'], ['stock', 'Остатки'], ['promo', 'Акции'], ['reviews', 'Отзывы' + (pend ? ` (${pend})` : '')], ['setup', 'Настройки']];
+  const nw = DB.wishes.filter(w => w.status !== 'done').length;
+  const T = [['orders', 'Заказы'], ['stats', 'Статистика'], ['wishes', 'Ждут' + (nw ? ` (${nw})` : '')], ['products', 'Товары'], ['stock', 'Остатки'], ['promo', 'Акции'], ['reviews', 'Отзывы' + (pend ? ` (${pend})` : '')], ['setup', 'Настройки']];
   return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><h1>Панель магазина</h1><span style="display:flex;gap:8px">${SB ? '<button class="btn sm sec" id="reload">Обновить</button>' : ''}<button class="btn sm sec" id="logout">Выйти</button></span></div>
   <div class="kpis"><div class="kpi"><span class="muted small">Заказы сегодня</span><b>${td.length}</b></div><div class="kpi"><span class="muted small">Выручка сегодня</span><b>${rub(td.reduce((a, o) => a + o.total, 0))}</b></div>
   <div class="kpi"><span class="muted small">Ждут проверки оплаты</span><b>${DB.orders.filter(o => o.status === 'awaiting').length}</b></div><div class="kpi"><span class="muted small">Вариантов с остатком ≤ 1</span><b class="${low ? 'low' : ''}">${low}</b></div></div>
   <div class="seg adm" style="margin:14px 0 16px">${T.map(([k, t]) => `<button class="${adm === k ? 'on' : ''}" data-adm="${k}">${t}</button>`).join('')}</div>
-  <div id="admBody">${({ orders: admOrders, products: admProducts, stock: admStock, promo: admPromo, reviews: admReviews, setup: admSetup })[adm]()}</div>`;
+  <div id="admBody">${({ orders: admOrders, products: admProducts, stock: admStock, promo: admPromo, reviews: admReviews, setup: admSetup, stats: admStats, wishes: admWishes })[adm]()}</div>`;
 }
 function admOrders() {
   let l = [...DB.orders].reverse(); if (ordF !== 'all') l = l.filter(o => o.status === ordF);
@@ -587,6 +680,114 @@ function admOrders() {
   ${o.returnCare ? `<div class="small"><span class="st paid">${esc(o.returnCareName || 'Возврат')}</span></div>` : ''}${o.bonusSpent ? `<div class="small muted">Бонусами: −${rub(o.bonusSpent)}</div>` : ''}${o.bonusEarned ? `<div class="small" style="color:var(--green)">Начислено бонусов: ${rub(o.bonusEarned)}</div>` : ''}
   ${o.paidClaimed && o.status === 'awaiting' ? '<div class="small" style="color:var(--accent)">Покупатель нажал «Я оплатил» — проверьте поступление</div>' : ''}</div>
   <span class="price">${rub(o.total)}</span><select class="inp" data-ost="${esc(o.id)}" style="width:auto;height:38px;font-size:14px">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${o.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>`).join('')}</div>` : '<div class="empty"><b>Заказов пока нет</b>Оформите тестовый заказ как покупатель — он появится здесь</div>'}`;
+}
+/* ===== Статистика ===== */
+let statPer = 30, statData = null, statLoading = false;
+const pct = (a, b) => b ? Math.round(a / b * 1000) / 10 : 0;
+const CONFIRMED = ['paid', 'assembling', 'shipped', 'done'];
+async function loadStats() {
+  if (statLoading) return; statLoading = true;
+  const from = Date.now() - statPer * 864e5; let ev = [];
+  if (SB) {
+    for (let off = 0; off < 100000; off += 1000) {
+      const { data, error } = await SB.from('events').select('ts,sid,type,src,pid,color,size,q,val,meta').gte('ts', new Date(from).toISOString()).order('ts').range(off, off + 999);
+      if (error) { statLoading = false; statData = { error: error.message }; return render(); }
+      ev.push(...data.map(e => ({ ...e, ts: Date.parse(e.ts) }))); if (data.length < 1000) break;
+    }
+    const w = await SB.from('wishes').select('*').order('created_at', { ascending: false });
+    if (!w.error) DB.wishes = w.data.map(x => ({ ...x, ts: Date.parse(x.created_at) }));
+  } else ev = (ls.get('desire_ev_v1') || []).filter(e => e.ts >= from);
+  statData = calcStats(ev, from); statLoading = false; if (route === 'admin' && adm === 'stats') render();
+}
+function calcStats(ev, from) {
+  const sids = t => new Set(ev.filter(e => e.type === t).map(e => e.sid));
+  const visits = new Set(ev.map(e => e.sid));
+  const orders = DB.orders.filter(o => o.date >= from);
+  const ok = orders.filter(o => CONFIRMED.includes(o.status));
+  // Каждый шаг = сессии, дошедшие до него или дальше (добавила в корзину ⇒ выбрала размер, даже если оставила размер по умолчанию)
+  const okS = new Set(ok.map(o => o.sid).filter(x => visits.has(x)));
+  const steps = [['Зашли на сайт', null], ['Каталог', 'catalog'], ['Карточка товара', 'product'], ['Выбрали цвет и размер', 'select'], ['Добавили в корзину', 'cart_add'], ['Начали оформление', 'checkout'],
+    ['Заполнили контакты', 'contacts'], ['Выбрали доставку', 'delivery'], ['Нажали «Оплатить по QR»', 'pay'], ['Нажали «Я оплатил»', 'paid'], ['Оплата подтверждена', 'ok']];
+  const sets = steps.map(([, t]) => t === null ? visits : t === 'ok' ? okS : sids(t));
+  const funnel = steps.map(([l], i) => { const u = new Set(); for (let j = i; j < sets.length; j++) sets[j].forEach(x => u.add(x)); return [l, u.size]; });
+  // источники
+  const src = {}; ev.filter(e => e.type === 'visit').forEach(e => { (src[e.src] ||= { v: 0, o: 0, r: 0 }).v++; });
+  ok.forEach(o => { const k = o.src || 'direct'; (src[k] ||= { v: 0, o: 0, r: 0 }).o++; src[k].r += o.total; });
+  // товары
+  const prod = {}; const P = id => prod[id] ||= { views: 0, cart: 0, sold: 0, rev: 0, fav: 0 };
+  ev.forEach(e => { if (!e.pid) return; if (e.type === 'product') P(e.pid).views++; if (e.type === 'cart_add') P(e.pid).cart++; if (e.type === 'fav') P(e.pid).fav++; });
+  const colors = {}; ev.filter(e => e.type === 'cart_add' && e.color).forEach(e => { colors[e.color] = (colors[e.color] || 0) + 1; });
+  ok.forEach(o => o.items.forEach(i => { P(i.pid).sold += i.qty; P(i.pid).rev += i.price * i.qty; }));
+  const oos = {}; ev.filter(e => e.type === 'oos').forEach(e => { const k = `${e.pid}|${e.color}|${e.size}`; oos[k] = (oos[k] || 0) + 1; });
+  const searches = {}; ev.filter(e => e.type === 'search' && e.q).forEach(e => { const s = searches[e.q] ||= { n: 0, zero: e.val === 0 }; s.n++; });
+  // покупатели
+  const byPhone = {}; DB.orders.filter(o => o.status !== 'cancelled').forEach(o => { const ph = (o.customer?.phone || '').replace(/\D/g, '').slice(-10); if (ph) (byPhone[ph] ||= []).push(o.date); });
+  let newC = 0, repC = 0; Object.values(byPhone).forEach(d => { const inP = d.filter(x => x >= from).length; if (!inP) return; if (d.some(x => x < from) || d.length > 1) repC++; else newC++; });
+  const custs = Object.keys(byPhone).length, allOrders = Object.values(byPhone).reduce((a, d) => a + d.length, 0);
+  const cities = {}, serv = {}; ok.forEach(o => { cities[o.delivery.city] = (cities[o.delivery.city] || 0) + 1; serv[o.delivery.service] = (serv[o.delivery.service] || 0) + 1; });
+  const rev = ok.reduce((a, o) => a + o.total, 0), items = ok.reduce((a, o) => a + o.items.reduce((b, i) => b + i.qty, 0), 0);
+  const gross = ok.reduce((a, o) => a + o.items.reduce((b, i) => b + (i.basePrice || i.price) * i.qty, 0), 0);
+  const disc = ok.reduce((a, o) => a + o.items.reduce((b, i) => b + ((i.basePrice || i.price) - i.price) * i.qty, 0) + (o.discount || 0) + (o.bonusSpent || 0), 0);
+  const promos = {}; ok.filter(o => o.promo).forEach(o => { (promos[o.promo] ||= { n: 0, sum: 0 }).n++; promos[o.promo].sum += o.discount || 0; });
+  const days = {}; for (let t = from; t <= Date.now(); t += 864e5) days[new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })] = 0;
+  ok.forEach(o => { const k = new Date(o.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }); if (k in days) days[k] += o.total; });
+  const weeks = {}; ok.forEach(o => { const d = new Date(o.date); const m = new Date(d); m.setDate(d.getDate() - ((d.getDay() + 6) % 7)); const k = 'с ' + m.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }); weeks[k] = (weeks[k] || 0) + o.total; });
+  const statuses = {}; orders.forEach(o => { statuses[o.status] = (statuses[o.status] || 0) + 1; });
+  const installs = new Set(ev.filter(e => e.type === 'install' || (e.type === 'visit' && e.meta?.standalone)).map(e => e.sid)).size;
+  return { funnel, src, prod, colors, oos, searches, newC, repC, custs, perCust: custs ? allOrders / custs : 0, cities, serv, rev, items, cnt: ok.length, gross, disc, promos, days, weeks, statuses, installs,
+    guar: ok.filter(o => o.returnCare).length, bonus: ok.reduce((a, o) => a + (o.bonusSpent || 0), 0), visits: visits.size, evCount: ev.length };
+}
+const bars = (rows, fmt = v => v, max) => { const m = max || Math.max(1, ...rows.map(r => r[1])); return `<div class="bars">${rows.map(([l, v, extra]) => `<div class="bar"><span class="bl">${esc(l)}</span><span class="bt"><i style="width:${Math.max(v ? 2 : 0, v / m * 100)}%"></i></span><span class="bv">${fmt(v)}${extra ? ` <em>${extra}</em>` : ''}</span></div>`).join('')}</div>`; };
+const top = (o, n = 8) => Object.entries(o).sort((a, b) => (b[1].n ?? b[1]) - (a[1].n ?? a[1])).slice(0, n);
+const srcName = k => ({ ig: 'Instagram', tg: 'Telegram', search: 'Поиск', direct: 'Прямой заход' }[k] || k);
+function admStats() {
+  if (!statData) { setTimeout(loadStats); return '<div class="empty"><b>Считаем…</b></div>'; }
+  if (statData.error) return `<div class="note">Статистика ещё не подключена в базе. Запустите обновлённый supabase-setup.sql в Supabase → SQL Editor.<br><span class="small muted">${esc(statData.error)}</span></div>`;
+  const S = statData, f = S.funnel;
+  let worst = 0, wi = -1; for (let i = 1; i < f.length - 1; i++) { const drop = f[i - 1][1] ? 1 - f[i][1] / f[i - 1][1] : 0; if (f[i - 1][1] >= 5 && drop > worst) { worst = drop; wi = i; } }
+  const prodRows = Object.entries(S.prod).map(([id, v]) => ({ id, name: byId(id)?.name || id, ...v })).sort((a, b) => b.views - a.views);
+  const lookers = prodRows.filter(r => r.views >= 15 && r.sold / r.views < .02).slice(0, 5);
+  return `<div class="chips">${[7, 30, 90].map(d => `<button class="chip ${statPer === d ? 'on' : ''}" data-per="${d}">${d} дней</button>`).join('')}</div>
+  <div class="kpis"><div class="kpi"><span class="muted small">Посетители</span><b>${S.visits}</b></div><div class="kpi"><span class="muted small">Оплаченные заказы</span><b>${S.cnt}</b></div><div class="kpi"><span class="muted small">Конверсия</span><b>${pct(S.cnt, S.visits)}%</b></div><div class="kpi"><span class="muted small">Выручка</span><b>${rub(S.rev)}</b></div><div class="kpi"><span class="muted small">Средний чек</span><b>${rub(S.cnt ? S.rev / S.cnt : 0)}</b></div></div>
+  <h2>Воронка</h2><div class="box">${f.map(([l, v], i) => `<div class="fn ${i === wi ? 'warn' : ''}"><span class="bl">${i + 1}. ${esc(l)}</span><span class="bt"><i style="width:${pct(v, f[0][1] || 1)}%"></i></span><span class="bv">${v}${i ? ` <em>${pct(v, f[i - 1][1])}%</em>` : ''}</span></div>`).join('')}
+  ${wi > 0 ? `<p class="small" style="color:var(--red);margin:10px 0 0">Больше всего уходят на шаге «${esc(f[wi][0])}»: дальше проходят только ${pct(f[wi][1], f[wi - 1][1])}%.</p>` : '<p class="small muted" style="margin:10px 0 0">Процент справа — сколько перешли с предыдущего шага.</p>'}</div>
+  <h2>Источники</h2><div class="box scroll"><table><thead><tr><th>Источник</th><th class="n">Визиты</th><th class="n">Заказы</th><th class="n">Конверсия</th><th class="n">Выручка</th></tr></thead><tbody>${Object.entries(S.src).sort((a, b) => b[1].v - a[1].v).map(([k, v]) => `<tr><td>${esc(srcName(k))}</td><td class="n">${v.v}</td><td class="n">${v.o}</td><td class="n">${pct(v.o, v.v)}%</td><td class="n">${rub(v.r)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Нет данных</td></tr>'}</tbody></table>
+  <p class="small muted">Чтобы различать сторис, шапку профиля и рассылки — используйте ссылки с метками ниже.</p></div>
+  <h2>Товары</h2><div class="box scroll"><table><thead><tr><th>Модель</th><th class="n">Просмотры</th><th class="n">В корзину</th><th class="n">Продано</th><th class="n">Просм.→корз.</th><th class="n">Выручка</th></tr></thead><tbody>${prodRows.slice(0, 15).map(r => `<tr><td>${esc(r.name)}</td><td class="n">${r.views}</td><td class="n">${r.cart}</td><td class="n">${r.sold}</td><td class="n">${pct(r.cart, r.views)}%</td><td class="n">${rub(r.rev)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">Нет данных</td></tr>'}</tbody></table>
+  ${lookers.length ? `<p class="small" style="margin:10px 0 0"><b>Смотрят, но не покупают:</b> ${lookers.map(r => esc(r.name)).join(', ')} — проверьте цену, фото и наличие размеров.</p>` : ''}</div>
+  <div class="stack3" style="margin-top:14px"><div class="box"><h3>Популярные цвета (в корзину)</h3>${bars(top(S.colors).map(([k, v]) => [k, v]))}</div>
+  <div class="box"><h3>Нет в наличии — спрашивали</h3>${Object.keys(S.oos).length ? bars(top(S.oos).map(([k, v]) => { const [pid, c, z] = k.split('|'); return [`${byId(pid)?.name || pid} · ${c} · ${z}`, v]; })) : '<p class="small muted">Пока никто не выбирал отсутствующие варианты</p>'}<p class="small muted">Сигнал, что дошивать. Подписки — во вкладке «Ждут».</p></div>
+  <div class="box"><h3>В избранном</h3>${bars(prodRows.filter(r => r.fav).sort((a, b) => b.fav - a.fav).slice(0, 8).map(r => [r.name, r.fav]))}</div></div>
+  <h2>Поиск</h2><div class="stack3"><div class="box"><h3>Частые запросы</h3>${bars(top(S.searches).map(([k, v]) => [k, v.n]))}</div><div class="box"><h3>Ничего не нашлось</h3>${bars(top(Object.fromEntries(Object.entries(S.searches).filter(([, v]) => v.zero))).map(([k, v]) => [k, v.n]))}<p class="small muted">Чего не хватает в ассортименте или в названиях</p></div></div>
+  <h2>Покупатели</h2><div class="kpis"><div class="kpi"><span class="muted small">Новые</span><b>${S.newC}</b></div><div class="kpi"><span class="muted small">Повторные</span><b>${S.repC}</b></div><div class="kpi"><span class="muted small">Заказов на покупателя</span><b>${S.perCust.toFixed(1)}</b></div><div class="kpi"><span class="muted small">Вещей в заказе</span><b>${S.cnt ? (S.items / S.cnt).toFixed(1) : 0}</b></div><div class="kpi"><span class="muted small">Установили приложение</span><b>${S.installs}</b></div></div>
+  <div class="stack3"><div class="box"><h3>Города</h3>${bars(top(S.cities).map(([k, v]) => [k, v]))}</div><div class="box"><h3>Доставка</h3>${bars(Object.entries(S.serv).map(([k, v]) => [k === 'ozon' ? 'Ozon' : 'СДЭК', v]))}</div>
+  <div class="box"><h3>Опции и скидки</h3><div class="sum"><span>Гарантия возврата</span><span>${S.guar} из ${S.cnt} (${pct(S.guar, S.cnt)}%)</span></div><div class="sum"><span>Оплачено бонусами</span><span>${rub(S.bonus)}</span></div><div class="sum"><span>Доля скидок</span><span>${pct(S.disc, S.gross)}%</span></div>
+  ${Object.keys(S.promos).length ? top(S.promos).map(([k, v]) => `<div class="sum"><span>Промокод ${esc(k)}</span><span>${v.n} · −${rub(v.sum)}</span></div>`).join('') : '<p class="small muted">Промокоды не применяли</p>'}</div></div>
+  <h2>Выручка</h2><div class="box"><h3>По дням</h3>${bars(Object.entries(S.days).slice(-31), v => v ? rub(v) : '—')}</div>
+  <div class="stack3" style="margin-top:14px"><div class="box"><h3>По неделям</h3>${bars(Object.entries(S.weeks), rub)}</div><div class="box"><h3>Лучшие товары по выручке</h3>${bars(prodRows.filter(r => r.rev).sort((a, b) => b.rev - a.rev).slice(0, 8).map(r => [r.name, r.rev]), rub)}</div>
+  <div class="box"><h3>Статусы заказов</h3>${Object.entries(STATUS).map(([k, v]) => `<div class="sum"><span>${v}</span><span>${S.statuses[k] || 0}</span></div>`).join('')}</div></div>
+  <h2>Ссылки с метками</h2><div class="box"><p class="small muted" style="margin-top:0">Ставьте такие ссылки в шапку профиля, сторис и Telegram — статистика покажет, что приносит заказы.</p>
+  <div class="two"><div class="field"><label for="u_s">Где ссылка</label><select class="inp" id="u_s"><option value="ig">Instagram</option><option value="tg">Telegram</option><option value="wa">WhatsApp</option><option value="ads">Реклама</option><option value="qr">QR на бирке/в посылке</option></select></div>
+  <div class="field"><label for="u_m">Место</label><select class="inp" id="u_m"><option value="bio">Шапка профиля</option><option value="stories">Сторис</option><option value="post">Пост</option><option value="direct">Директ / личка</option><option value="channel">Канал</option><option value="package">Посылка</option></select></div></div>
+  <div class="field"><label for="u_c">Кампания (необязательно, латиницей)</label><input class="inp" id="u_c" placeholder="blackfriday"></div>
+  <button class="btn" id="mkLink">Создать и скопировать ссылку</button><p class="small" id="utmOut" style="word-break:break-all;margin-bottom:0"></p></div>
+  <p class="small muted">Событий за период: ${S.evCount}. Действия сотрудников в статистику не попадают.</p>`;
+}
+function buildUtm() { const c = ($('#u_c').value || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, ''); return `${location.origin}/?utm_source=${$('#u_s').value}&utm_medium=${$('#u_m').value}${c ? '&utm_campaign=' + c : ''}`; }
+function admWishes() {
+  const l = [...DB.wishes].sort((a, b) => (a.status === 'done') - (b.status === 'done') || b.ts - a.ts);
+  if (!l.length) { if (SB && !statData) setTimeout(loadStats); return '<div class="empty"><b>Пока никто не ждёт</b>Здесь появятся покупатели, которые нажали «Сообщить о поступлении»</div>'; }
+  const groups = {}; l.filter(w => w.status !== 'done').forEach(w => { const k = `${w.pid}|${w.color}|${w.size}`; groups[k] = (groups[k] || 0) + 1; });
+  return `${Object.keys(groups).length ? `<div class="box"><h3>Что дошить или довезти</h3>${bars(Object.entries(groups).sort((a, b) => b[1] - a[1]).map(([k, v]) => { const [pid, c, z] = k.split('|'); return [`${byId(pid)?.name || pid} · ${c} · ${z}`, v]; }), v => v + ' чел.')}</div>` : ''}
+  <div class="list" style="margin-top:12px">${l.map(w => { const p = byId(w.pid), inStock = p && stockOf(p, w.color, w.size) > 0, c = String(w.contact || ''), isTg = /^@|[a-z]/i.test(c) && !/^\+?\d[\d\s()-]+$/.test(c);
+    const link = isTg ? tgLink(c) : `https://wa.me/${c.replace(/\D/g, '').replace(/^8/, '7')}?text=${encodeURIComponent(`Здравствуйте! ${p?.name || ''} ${w.color} ${w.size} снова в наличии в DESIRE.`)}`;
+    return `<div class="row" style="flex-wrap:wrap"><div class="f" style="flex:1 1 200px"><b>${esc(p?.name || w.pid)}</b> · ${esc(w.color)} · ${esc(w.size)} ${w.status === 'done' ? '<span class="st done">сообщили</span>' : inStock ? '<span class="st shipped">уже в наличии</span>' : ''}<div class="small muted">${new Date(w.ts).toLocaleDateString('ru-RU')} · ${esc(c)}</div></div>
+    ${w.status !== 'done' ? `<a class="btn sm sec" href="${esc(link)}">Написать</a><button class="btn sm" data-wdone="${esc(w.id)}">Сообщили</button>` : ''}</div>`; }).join('')}</div>`;
+}
+async function markWish(id) {
+  const w = DB.wishes.find(x => String(x.id) === id); if (!w) return;
+  if (SB) { const { error } = await SB.from('wishes').update({ status: 'done' }).eq('id', id); if (error) return toast('Не удалось: ' + error.message); }
+  w.status = 'done'; if (!SB) save(); render();
 }
 function admReviews() {
   if (!reviewsOn) return '<div class="note">Отзывы ещё не подключены в базе. Запустите обновлённый файл supabase-setup.sql в Supabase → SQL Editor.</div>';
@@ -644,6 +845,9 @@ function admSetup() {
   <div class="box" style="margin-top:12px"><h3>Бонусы</h3><div class="switch"><span>Бонусная программа включена</span><input type="checkbox" data-set="bonus.on" ${s.bonus.on ? 'checked' : ''}></div>
   <div class="two"><div class="field"><label>Начислять, % от заказа</label><input class="inp" type="number" min="0" max="50" data-set="bonus.earnPct" value="${s.bonus.earnPct}"></div><div class="field"><label>Оплатить бонусами до, %</label><input class="inp" type="number" min="0" max="100" data-set="bonus.maxSpendPct" value="${s.bonus.maxSpendPct}"></div></div>
   <p class="small muted">Бонусы начисляются, когда заказу ставится статус «Получен». При отмене заказа списанные бонусы возвращаются.</p></div>
+  <div class="box" style="margin-top:12px"><h3>Яндекс Метрика и реквизиты</h3><div class="two"><div class="field"><label>Номер счётчика Метрики</label><input class="inp" data-set="metrikaId" inputmode="numeric" placeholder="например, 98765432" value="${esc(s.metrikaId)}"></div>
+  <div class="field"><label>Оператор данных (для политики)</label><input class="inp" data-set="legal.name" value="${esc(s.legal.name)}"></div><div class="field"><label>ИНН</label><input class="inp" data-set="legal.inn" value="${esc(s.legal.inn)}"></div><div class="field"><label>Email для запросов по данным</label><input class="inp" data-set="legal.email" value="${esc(s.legal.email)}"></div></div>
+  <p class="small muted">Метрика включается только у покупателей, которые приняли cookie.</p></div>
   <div class="box" style="margin-top:12px"><h3>Контакты и доступ</h3><div class="two"><div class="field"><label>Instagram</label><input class="inp" data-set="contacts.instagram" value="${esc(s.contacts.instagram)}"></div><div class="field"><label>Telegram-канал</label><input class="inp" data-set="contacts.telegram" value="${esc(s.contacts.telegram)}"></div>
   <div class="field"><label>Telegram-группа</label><input class="inp" data-set="contacts.group" value="${esc(s.contacts.group)}"></div><div class="field"><label>Telegram менеджера</label><input class="inp" data-set="contacts.managerTg" value="${esc(s.contacts.managerTg)}"></div>
   <div class="field"><label>WhatsApp (номер)</label><input class="inp" data-set="contacts.whatsapp" inputmode="tel" value="${esc(s.contacts.whatsapp)}"></div>
@@ -669,6 +873,9 @@ function bindAdmin() {
     if (t.id === 'reload') { t.disabled = true; loadRemote(true).then(() => { render(); toast('Обновлено'); }).catch(() => { t.disabled = false; toast('Не удалось обновить'); }); }
     if (t.id === 'seed') confirmBox('Загрузить 40 моделей из каталога в базу? Товары с такими же названиями будут перезаписаны.', async () => { DB.products = clone(SEED.products); if (!DB.promos.length) DB.promos = clone(SEED.promos); if (!DB.campaigns.length) DB.campaigns = clone(SEED.campaigns); clearTimeout(syncT); if (await sbSync()) { toast('Каталог загружен в базу'); render(); } });
     if (t.dataset.of) { ordF = t.dataset.of; render(); }
+    if (t.dataset.per) { statPer = +t.dataset.per; statData = null; render(); }
+    if (t.dataset.wdone) markWish(t.dataset.wdone);
+    if (t.id === 'mkLink') { const u = buildUtm(); $('#utmOut').textContent = u; (navigator.clipboard ? navigator.clipboard.writeText(u) : Promise.reject()).then(() => toast('Ссылка скопирована'), () => toast('Скопируйте ссылку ниже')); }
     if (t.dataset.rvs) setReview(t.dataset.rid, t.dataset.rvs);
     if (t.dataset.rvd) confirmBox('Удалить отзыв?', () => setReview(t.dataset.rvd, ''));
     if (t.dataset.edit) editProduct(t.dataset.edit);
@@ -763,11 +970,13 @@ document.addEventListener('click', e => {
   if (t.dataset.inst) return installAction(t.dataset.inst);
   if (t.dataset.contact !== undefined) return openContact(t.dataset.contact);
   if (t.dataset.returns) return openReturns();
+  if (t.dataset.policy) return openPolicy();
+  if (t.dataset.consent) { if (t.dataset.consent === 'reset') { try { localStorage.removeItem(CONSENT); } catch {} toast('Выберите настройки cookie внизу экрана'); document.querySelectorAll('.sheetbg [data-close]').forEach(b => b.click()); return consentBanner(); } ls.set(CONSENT, t.dataset.consent); document.getElementById('cookie')?.remove(); if (t.dataset.consent === 'all') loadMetrika(); return; }
   if (t.id === 'chatBtn') return openContact('');
   if (t.dataset.go) return go(t.dataset.go);
   if (t.dataset.fav && !t.closest('.sheet')) return toggleFav(t.dataset.fav);
   if (t.dataset.open && !t.closest('.sheet')) return openProduct(t.dataset.open);
-  if (t.dataset.cat !== undefined && route !== 'admin') { catFilter = t.dataset.cat; if (route !== 'catalog') go('catalog'); else render(); return; }
+  if (t.dataset.cat !== undefined && route !== 'admin') { catFilter = t.dataset.cat; if (route === 'catalog') track('catalog', { meta: { cat: catFilter } }); if (route !== 'catalog') go('catalog'); else render(); return; }
   if (t.dataset.q) { const i = cart[+t.dataset.q], p = byId(i.pid), n = i.qty + +t.dataset.d; if (n > stockOf(p, i.color, i.size)) return toast('Больше нет в наличии'); if (n < 1) cart.splice(+t.dataset.q, 1); else i.qty = n; saveCart(); render(); return; }
   if (t.dataset.rm) { cart.splice(+t.dataset.rm, 1); saveCart(); render(); return; }
   if (t.id === 'applyPromo') { const c = $('#promo').value.trim().toUpperCase(), p = DB.promos.find(x => x.code === c && x.active); if (!p) { promoApplied = null; toast('Промокод не найден'); } else { promoApplied = c; toast(promoDiscount(subtotal()) ? 'Промокод применён' : `Промокод действует от ${rub(p.minSum)}`); } render(); return; }
@@ -777,9 +986,10 @@ document.addEventListener('click', e => {
   if (t.id === 'logo') return go('home');
   if (t.id === 'searchBtn') { go('catalog'); setTimeout(() => $('#q')?.focus(), 50); }
 });
-let qt;
+let qt, sqt;
+const searchCount = q => visible().filter(p => (p.name + ' ' + p.cat + ' ' + p.colors.join(' ') + ' ' + p.desc).toLowerCase().includes(q)).length;
 document.addEventListener('input', e => {
-  if (e.target.id === 'q') { query = e.target.value; clearTimeout(qt); qt = setTimeout(() => { const pos = e.target.selectionStart; render(); const n = $('#q'); n.focus(); n.setSelectionRange(pos, pos); }, 200); }
+  if (e.target.id === 'q') { query = e.target.value; clearTimeout(sqt); sqt = setTimeout(() => { const q = query.trim().toLowerCase(); if (q.length >= 2) track('search', { q: q.slice(0, 60), val: searchCount(q) }); }, 1500); clearTimeout(qt); qt = setTimeout(() => { const pos = e.target.selectionStart; render(); const n = $('#q'); n.focus(); n.setSelectionRange(pos, pos); }, 200); }
 });
 document.addEventListener('change', e => { if (e.target.id === 'sort') { sortBy = e.target.value; render(); } });
 window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (h && h !== route && TABS.some(x => x[0] === h)) { route = h; render(); } });
@@ -794,7 +1004,7 @@ const isSamsung = /SamsungBrowser/i.test(UA);
 const standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
 let installEvt = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; if (route === 'home' || route === 'profile') render(); });
-window.addEventListener('appinstalled', () => { installEvt = null; toast('DESIRE установлен на телефон'); render(); });
+window.addEventListener('appinstalled', () => { track('install'); installEvt = null; toast('DESIRE установлен на телефон'); render(); });
 const installMode = () => standalone ? '' : inApp ? 'inapp' : installEvt ? 'prompt' : isIOS ? 'ios' : isAndroid ? 'android' : '';
 const DISMISS_KEY = 'desire_inst_hide';
 function installBanner(always) {
@@ -870,6 +1080,8 @@ async function installAction(a) {
 if ('serviceWorker' in navigator && location.protocol === 'https:' && window.top === window.self) { try { navigator.serviceWorker.register('/sw.js').catch(() => {}); } catch {} }
 if (/netlify\.app$/.test(location.hostname)) document.body.classList.add('nf');
 const h0 = location.hash.slice(1); if (TABS.some(x => x[0] === h0)) route = h0;
+setTimeout(() => { consentBanner(); loadMetrika(); }, 800);
+if (newSession) track('visit', { meta: { standalone: standalone, ref: (document.referrer || '').slice(0, 80), medium: visitSrc?.medium || '', campaign: visitSrc?.campaign || '' } });
 render();
 if (SB) {
   const tm = setTimeout(() => { if (loading) { loading = false; loadErr = 'База не отвечает. Проверьте интернет и обновите страницу.'; render(); } }, 12000);

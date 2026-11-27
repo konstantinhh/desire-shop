@@ -172,3 +172,61 @@ drop policy if exists "staff upload photos" on storage.objects;
 create policy "staff upload photos" on storage.objects for insert to authenticated with check (bucket_id = 'photos');
 drop policy if exists "staff delete photos" on storage.objects;
 create policy "staff delete photos" on storage.objects for delete to authenticated using (bucket_id = 'photos');
+
+-- ===== v1.8: статистика (анонимные события) и «Сообщить о поступлении» =====
+create table if not exists public.events (
+  id bigserial primary key,
+  ts timestamptz not null default now(),
+  sid text not null, type text not null,
+  src text, pid text, color text, size text, q text, val numeric, meta jsonb
+);
+create index if not exists events_ts on public.events (ts);
+alter table public.events enable row level security;
+drop policy if exists "staff events" on public.events;
+create policy "staff events" on public.events for select to authenticated using (true);
+drop policy if exists "staff events delete" on public.events;
+create policy "staff events delete" on public.events for delete to authenticated using (true);
+
+-- Покупатели только добавляют события через эту функцию: ≤50 за раз, только известные типы, длины обрезаются
+create or replace function public.track(p_events jsonb) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if jsonb_typeof(p_events) <> 'array' or jsonb_array_length(p_events) > 50 then raise exception 'BAD'; end if;
+  insert into events (ts, sid, type, src, pid, color, size, q, val, meta)
+  select case when jsonb_typeof(e->'ts') = 'number' then to_timestamp(least(greatest((e->>'ts')::double precision / 1000, extract(epoch from now()) - 86400), extract(epoch from now()))) else now() end,
+         left(e->>'sid', 40), e->>'type', left(e->>'src', 40), left(e->>'pid', 40), left(e->>'color', 60), left(e->>'size', 30),
+         left(lower(e->>'q'), 80), case when jsonb_typeof(e->'val') = 'number' then (e->>'val')::numeric end,
+         case when jsonb_typeof(e->'meta') = 'object' and length((e->'meta')::text) < 600 then e->'meta' end
+  from jsonb_array_elements(p_events) e
+  where jsonb_typeof(e) = 'object' and coalesce(e->>'sid', '') <> ''
+    and e->>'type' in ('visit','catalog','product','select','oos','cart_add','cart_view','checkout','contacts','delivery','pay','paid','fav','search','install','wish_open','wish');
+end $$;
+
+create table if not exists public.wishes (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  sid text, pid text not null, color text, size text, contact text not null,
+  status text not null default 'new'
+);
+alter table public.wishes enable row level security;
+drop policy if exists "staff wishes" on public.wishes;
+create policy "staff wishes" on public.wishes for all to authenticated using (true) with check (true);
+
+create or replace function public.add_wish(p_sid text, p_pid text, p_color text, p_size text, p_contact text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if length(regexp_replace(coalesce(p_contact, ''), '[^0-9A-Za-z]', '', 'g')) < 4 then raise exception 'BAD_CONTACT'; end if;
+  if not exists (select 1 from products where id = p_pid) then raise exception 'NO_PRODUCT'; end if;
+  if (select count(*) from wishes where created_at > now() - interval '1 hour' and sid = p_sid) >= 10 then raise exception 'TOO_MANY'; end if;
+  -- одна подписка на вариант с одного контакта
+  if exists (select 1 from wishes where pid = p_pid and color is not distinct from p_color and size is not distinct from p_size
+             and contact = left(trim(p_contact), 60) and status = 'new') then return; end if;
+  insert into wishes (sid, pid, color, size, contact) values (left(p_sid, 40), p_pid, left(p_color, 60), left(p_size, 30), left(trim(p_contact), 60));
+end $$;
+
+revoke all on public.events, public.wishes from anon;
+grant select, delete on public.events to authenticated;
+grant all on public.wishes to authenticated;
+
+revoke all on function public.track(jsonb), public.add_wish(text, text, text, text, text) from public;
+grant execute on function public.track(jsonb), public.add_wish(text, text, text, text, text) to anon, authenticated;
