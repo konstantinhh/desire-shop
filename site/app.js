@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '2.3';
+const APP_VERSION = '2.4';
 /* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -277,6 +277,18 @@ function openReturns() {
     <button class="btn w sec" style="margin-top:14px" data-contact="Здравствуйте! Хочу оформить возврат по заказу №">Написать про возврат</button></div>`);
 }
 
+/* ===== Параметры товара (замеры) ===== */
+const paramsOf = p => (p.params || []).filter(r => r && (r.n || '').trim() && (r.v || '').trim());
+function openParams(p) {
+  const rows = paramsOf(p);
+  sheet('Параметры · ' + p.name, `<div class="sh-b"><div class="list" style="margin-top:6px">
+    <div class="row"><span class="f muted">Размер</span><span class="r">${esc(p.sizes.join(', '))}</span></div>
+    ${rows.length ? rows.map(r => `<div class="row"><span class="f muted">${esc(r.n)}</span><span class="r">${esc(r.v)}</span></div>`).join('') : `<div class="row"><span class="f muted">Замеры</span><span class="r">${esc(p.specs || 'уточняйте у нас')}</span></div>`}
+    ${p.comp ? `<div class="row"><span class="f muted">Состав</span><span class="r">${esc(p.comp)}</span></div>` : ''}</div>
+    <p class="small muted">Замеры сняты с изделия в разложенном виде. «×2» — ширина изделия: умножьте на 2, чтобы получить обхват.</p>
+    <button class="btn sec w sm" data-contact="${esc(`Здравствуйте! Подскажите по размеру: ${p.name}.`)}">${svg('chat')} Подобрать размер с консультантом</button></div>`);
+}
+
 /* ===== «Сообщить о поступлении» ===== */
 function openWish(p, color, size) {
   track('wish_open', { pid: p.id, color, size });
@@ -503,9 +515,9 @@ function openProduct(id) {
       <button class="icon fav ${favs.includes(p.id) ? 'on' : ''}" style="position:static;background:var(--fill);width:50px;height:50px;border-radius:14px" data-fav="${esc(p.id)}" aria-label="В избранное">${svg('heart')}</button></div>
       ${cart.length ? (n => `<button class="btn w sec" data-tocart="1" style="margin:-4px 0 10px">Перейти в корзину · ${n} ${plural(n, 'вещь', 'вещи', 'вещей')}</button>`)(cart.reduce((a, i) => a + i.qty, 0)) : ''}
       ${p.freeShip ? '<div class="note">Доставка этой модели — бесплатно</div>' : ''}
-      <button class="btn sec w sm" style="margin-top:10px" data-contact="${esc(`Здравствуйте! Подскажите по размеру: ${p.name}, цвет ${color}.`)}">${svg('chat')} Спросить про размер</button>
+      <div class="two2" style="margin-top:10px"><button class="btn sec sm" data-params="1">Смотреть параметры</button><button class="btn sec sm" data-contact="${esc(`Здравствуйте! Подскажите по размеру: ${p.name}, цвет ${color}.`)}">${svg('chat')} Спросить про размер</button></div>
       <h3 style="margin-top:18px">Описание</h3><p style="margin:0 0 10px">${esc(p.desc)}</p>
-      <div class="list"><div class="row"><span class="f muted">Состав</span><span class="r">${esc(p.comp)}</span></div><div class="row"><span class="f muted">Размер</span><span class="r">${esc(p.sizes.join(', '))}</span></div><div class="row"><span class="f muted">Замеры</span><span class="r">${esc(p.specs)}</span></div></div>
+      <div class="list"><div class="row"><span class="f muted">Состав</span><span class="r">${esc(p.comp)}</span></div><div class="row"><span class="f muted">Размер</span><span class="r">${esc(p.sizes.join(', '))}</span></div>${paramsOf(p).length ? '' : `<div class="row"><span class="f muted">Замеры</span><span class="r">${esc(p.specs)}</span></div>`}</div>
       <h3 style="margin-top:18px">Уход</h3><p style="margin:0 0 10px">${esc(careOf(p))}</p>
       <p class="small muted" style="margin:0 0 10px"><button class="lnk" data-returns="1">Условия возврата</button></p>
       ${reviewsHtml(p)}
@@ -517,6 +529,7 @@ function openProduct(id) {
       if (t.dataset.color) { color = t.dataset.color; if (!stockOf(p, color, size)) size = p.sizes.find(s => stockOf(p, color, s)) || size; qty = 1; draw(); track(stockOf(p, color, size) ? 'select' : 'oos', { pid: p.id, color, size }); }
       else if (t.dataset.size) { size = t.dataset.size; qty = 1; draw(); track(stockOf(p, color, size) ? 'select' : 'oos', { pid: p.id, color, size }); }
       else if (t.dataset.wish) openWish(p, color, size);
+      else if (t.dataset.params) { openParams(p); track('params', { pid: p.id }); }
       else if (t.dataset.pq) { qty = Math.max(1, Math.min(stockOf(p, color, size) || 1, qty + +t.dataset.pq)); draw(); }
       else if (t.id === 'add') { if (addToCart(p.id, color, size, qty)) { toast(`${p.name} · ${color} — в корзине`); track('cart_add', { pid: p.id, color, size, val: priceOf(p) * qty }); draw(); } }
       else if (t.dataset.tocart) { api.close(); setTimeout(() => go('cart'), 250); }
@@ -1068,7 +1081,7 @@ function resizeImg(file, max = 700, q = .78) {
   return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => { const im = new Image(); im.onload = () => { const k = Math.min(1, max / Math.max(im.width, im.height)); const c = document.createElement('canvas'); c.width = im.width * k; c.height = im.height * k; c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); res(c.toDataURL('image/jpeg', q)); }; im.onerror = rej; im.src = r.result; }; r.onerror = rej; r.readAsDataURL(file); });
 }
 function editProduct(id) {
-  const src = id ? byId(id) : { id: '', name: '', cat: DB.categories[0], price: 0, oldPrice: 0, desc: '', comp: '', specs: '', sizes: ['42–48'], colors: ['Чёрный'], photos: [], stock: {}, hidden: false, freeShip: false, isNew: true, tag: '' };
+  const src = id ? byId(id) : { id: '', name: '', cat: DB.categories[0], price: 0, oldPrice: 0, desc: '', comp: '', specs: '', params: [], sizes: ['42–48'], colors: ['Чёрный'], photos: [], stock: {}, hidden: false, freeShip: false, isNew: true, tag: '' };
   const p = clone(src);
   sheet(id ? 'Редактировать товар' : 'Новый товар', '', api => {
     const draw = () => api.set(`<div class="sh-b">
@@ -1076,7 +1089,10 @@ function editProduct(id) {
     <div class="two"><div class="field"><label for="e_c">Категория</label><select class="inp" id="e_c">${DB.categories.map(c => `<option ${c === p.cat ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div><div class="field"><label for="e_t">Метка (необязательно)</label><input class="inp" id="e_t" value="${esc(p.tag || '')}" placeholder="Новый материал"></div>
     <div class="field"><label for="e_p">Цена, ₽</label><input class="inp" id="e_p" type="number" min="0" value="${p.price}"></div><div class="field"><label for="e_o">Старая цена, ₽ (для скидки)</label><input class="inp" id="e_o" type="number" min="0" value="${p.oldPrice || ''}"></div></div>
     <div class="field"><label for="e_d">Описание</label><textarea class="inp" id="e_d">${esc(p.desc)}</textarea></div>
-    <div class="two"><div class="field"><label for="e_m">Состав</label><input class="inp" id="e_m" value="${esc(p.comp)}"></div><div class="field"><label for="e_s">Замеры</label><input class="inp" id="e_s" value="${esc(p.specs)}"></div></div>
+    <div class="field"><label for="e_m">Состав</label><input class="inp" id="e_m" value="${esc(p.comp)}"></div>
+    <h3 style="margin-top:12px">Параметры</h3><p class="small muted" style="margin-top:0">Покупатель видит их по кнопке «Смотреть параметры». Например: Длина — 65 см, Ширина — 60×2 см.</p>
+    <div class="prm">${(p.params || []).map((r, i) => `<div class="prow"><input class="inp" data-pn="${i}" placeholder="Название" value="${esc(r.n)}"><input class="inp" data-pv="${i}" placeholder="Значение" value="${esc(r.v)}"><button class="x" data-pdel="${i}" aria-label="Удалить параметр">×</button></div>`).join('')}</div>
+    <button class="btn sec sm" id="e_padd" style="margin:6px 0 4px">+ Добавить параметр</button>
     <div class="field"><label for="e_care">Уход (пусто — подставится подсказка по составу)</label><textarea class="inp" id="e_care" placeholder="${esc(defaultCare(p))}">${esc(p.care || '')}</textarea></div>
     <div class="field"><label for="e_col">Цвета через запятую</label><input class="inp" id="e_col" value="${esc(p.colors.join(', '))}"></div>
     <div class="field"><label for="e_sz">Размеры через запятую</label><input class="inp" id="e_sz" value="${esc(p.sizes.join(', '))}"></div>
@@ -1089,7 +1105,8 @@ function editProduct(id) {
     <button class="btn w" id="e_save" style="margin-top:16px">Сохранить</button>${id ? '<button class="btn w red" id="e_del" style="margin-top:6px">Удалить товар</button>' : ''}</div>`);
     const read = () => {
       p.name = $('#e_n').value.trim(); p.cat = $('#e_c').value; p.tag = $('#e_t').value.trim(); p.price = +$('#e_p').value || 0; p.oldPrice = +$('#e_o').value || 0;
-      p.desc = $('#e_d').value; p.care = $('#e_care').value.trim(); p.comp = $('#e_m').value; p.specs = $('#e_s').value; p.hidden = !$('#e_h').checked; p.freeShip = $('#e_f').checked; p.isNew = $('#e_new').checked;
+      p.desc = $('#e_d').value; p.care = $('#e_care').value.trim(); p.comp = $('#e_m').value;
+      p.params = [...api.el.querySelectorAll('[data-pn]')].map(x => ({ n: x.value.trim(), v: (api.el.querySelector(`[data-pv="${x.dataset.pn}"]`).value || '').trim() })); p.hidden = !$('#e_h').checked; p.freeShip = $('#e_f').checked; p.isNew = $('#e_new').checked;
       api.el.querySelectorAll('[data-ek]').forEach(x => p.stock[x.dataset.ek] = Math.max(0, parseInt(x.value) || 0));
     };
     draw();
@@ -1102,8 +1119,11 @@ function editProduct(id) {
     api.el.addEventListener('click', e => {
       const t = e.target.closest('button'); if (!t) return;
       if (t.dataset.xph) { read(); p.photos.splice(+t.dataset.xph, 1); draw(); }
+      if (t.id === 'e_padd') { read(); (p.params ||= []).push({ n: '', v: '' }); draw(); api.el.querySelector(`[data-pn="${p.params.length - 1}"]`)?.focus(); }
+      if (t.dataset.pdel) { read(); p.params.splice(+t.dataset.pdel, 1); draw(); }
       if (t.id === 'e_save') {
         read();
+        p.params = (p.params || []).filter(r => r.n || r.v);
         if (!p.name || !p.price) return toast('Укажите название и цену');
         if (!p.colors.length || !p.sizes.length) return toast('Нужен хотя бы один цвет и размер');
         Object.keys(p.stock).forEach(k => { const [c, s] = k.split('|'); if (!p.colors.includes(c) || !p.sizes.includes(s)) delete p.stock[k]; });

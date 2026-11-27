@@ -199,7 +199,7 @@ begin
          case when jsonb_typeof(e->'meta') = 'object' and length((e->'meta')::text) < 600 then e->'meta' end
   from jsonb_array_elements(p_events) e
   where jsonb_typeof(e) = 'object' and coalesce(e->>'sid', '') <> ''
-    and e->>'type' in ('visit','catalog','product','select','oos','cart_add','cart_view','checkout','contacts','delivery','pay','paid','fav','search','install','wish_open','wish','notify');
+    and e->>'type' in ('visit','catalog','product','select','oos','cart_add','cart_view','checkout','contacts','delivery','pay','paid','fav','search','install','wish_open','wish','notify','pay_bank','params');
 end $$;
 
 create table if not exists public.wishes (
