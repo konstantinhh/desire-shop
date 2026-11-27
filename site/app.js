@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '2.2.2';
+const APP_VERSION = '2.3';
 /* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -137,6 +137,7 @@ const IC = {
   profile: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   heart: '<path d="M12 20s-7.5-4.6-9.3-9.2C1.5 7.6 3.6 4.5 6.8 4.5c2.1 0 3.6 1.2 5.2 3 1.6-1.8 3.1-3 5.2-3 3.2 0 5.3 3.1 4.1 6.3C19.5 15.4 12 20 12 20z"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
   chat: '<path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4V6a1 1 0 0 1 1-1z"/><path d="M8 10h8M8 13h5"/>',
   star: '<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z"/>',
   a_orders: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
@@ -256,17 +257,17 @@ function openContact(text) {
 }
 /* ===== Возврат и обмен =====
    mode 'paid': акционные товары без возврата, возврат можно купить отдельно («Гарантия возврата»).
-   mode 'law':  возврат 7 дней на всё, платная опция — расширенный возврат. Переключается в Настройках. */
+   mode 'law':  возврат 14 дней на всё, платная опция — расширенный возврат. Переключается в Настройках. */
 const paidMode = () => DB.settings.returns.mode !== 'law';
 const isSale = p => !!(p && oldOf(p));
 const cartHasSale = () => cartItems().some(i => isSale(byId(i.pid)));  // (не используется в режиме 'paid' — гарантия на весь заказ)
 const optName = () => paidMode() ? 'Гарантия возврата' : 'Возврат без забот';
-const optText = () => paidMode() ? 'Любую вещь из заказа можно будет вернуть в течение 7 дней после получения.' : `${DB.settings.returns.extDays} дней на возврат вместо 7, обратную доставку оплачиваем мы. Для всех вещей в заказе, включая акционные.`;
+const optText = () => paidMode() ? 'Любую вещь из заказа можно будет вернуть в течение 14 дней после получения.' : `${DB.settings.returns.extDays} дней на возврат вместо 7, обратную доставку оплачиваем мы. Для всех вещей в заказе, включая акционные.`;
 function openReturns() {
   const r = DB.settings.returns, c = DB.settings.contacts;
   sheet('Условия возврата', `<div class="sh-b">
     ${paidMode() ? `<div class="note" style="margin-top:4px"><b>Возврат товаров не предусмотрен</b> — это позволяет нам держать такие цены.</div>
-    <div class="note" style="margin-top:8px">Если вы не согласны с этим условием — добавьте при оформлении заказа <b>«Гарантию возврата» за ${rub(r.extPrice)}</b>. С ней любую вещь из заказа можно вернуть в течение 7 дней после получения.</div>` : `<div class="note" style="margin-top:4px"><b>7 дней на возврат</b> — с момента получения заказа. Касается всех вещей, в том числе купленных по акции.</div>`}
+    <div class="note" style="margin-top:8px">Если вы не согласны с этим условием — добавьте при оформлении заказа <b>«Гарантию возврата» за ${rub(r.extPrice)}</b>. С ней любую вещь из заказа можно вернуть в течение 14 дней после получения.</div>` : `<div class="note" style="margin-top:4px"><b>14 дней на возврат</b> — с момента получения заказа. Касается всех вещей, в том числе купленных по акции.</div>`}
     <h3 style="margin-top:16px">${paidMode() ? 'Условия возврата по гарантии' : 'Условия'}</h3>
     <ul class="ul"><li>Вещь не носили, сохранены товарный вид, бирки и ярлыки.</li><li>Обратную доставку оплачивает покупатель.</li><li>Деньги за товар вернём в течение 10 дней после получения заявления — тем же способом, которым вы платили.</li></ul>
     <div class="note" style="margin-top:10px"><b>Вещь с браком</b> обменяем или вернём деньги в любом случае — с гарантией и без. Доставку оплачиваем мы.</div>
@@ -308,7 +309,7 @@ async function openNotify(from) {
   await loadNotiInfo();
   const { data: st } = await SB.rpc('notif_status', { p_dev: DEV }); const S = st || { push: false, tg: false, news: true };
   if ((S.push || S.tg) !== notifOn) setNotifOn(S.push || S.tg);
-  const intro = from === 'order' ? 'Сообщим, когда оплата подтвердится и заказ отправится.' : from === 'wish' ? 'Так мы напишем автоматически, как только вещь появится.' : 'Статусы заказов, «снова в наличии» и новинки — без спама.';
+  const intro = from === 'first' ? 'Расскажем первыми о новинках и скидках, а после заказа — когда он оплачен и отправлен.' : from === 'order' ? 'Сообщим, когда оплата подтвердится и заказ отправится.' : from === 'wish' ? 'Так мы напишем автоматически, как только вещь появится.' : 'Статусы заказов, «снова в наличии» и новинки — без спама.';
   const iosNeedsInstall = isIOS && !standalone;
   sheet('Уведомления', `<div class="sh-b"><p class="muted" style="margin-top:4px">${intro}</p>
     <div class="list">
@@ -400,6 +401,7 @@ function viewHome() {
   return `${installBanner(false)}<section class="hero"><div class="tx"><span class="muted small">Каталог осень–зима 2026</span><b>DESIRE</b><p>Костюмы, свитшоты и базовые вещи, которые носят каждый день. Доставка в пункты Ozon и СДЭК по всей России.</p><div><button class="btn" data-go="catalog">Смотреть каталог</button></div></div>
   <div class="ph">${h.map(p => `<button data-open="${p.id}"><img src="${esc(coverOf(p))}" alt="${esc(p.name)}"></button>`).join('')}</div></section>
   ${camp.map(c => `<div class="promo"><b>${esc(c.title)}</b><span>${esc(c.text)}</span>${c.cat ? `<button class="btn sm sec" data-cat="${esc(c.cat)}">Смотреть</button>` : ''}</div>`).join('')}
+  ${SB && !notifOn && !ls.get('desire_notif_hide') ? `<div class="notibox"><span class="ni">${svg('bell')}</span><div class="f"><b>Узнавайте первыми</b><span>Новинки, скидки и статус заказа — в Telegram или уведомлениями на телефоне</span></div><button class="btn sm" data-notify="1">Подключить</button><button class="x" data-notihide="1" aria-label="Скрыть">${svg('close')}</button></div>` : ''}
   <h2>Категории</h2><div class="chips">${DB.categories.map(c => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
   ${sale.length ? `<h2>Скидки</h2><div class="grid">${sale.map(cardHtml).join('')}</div>` : ''}
   <h2>Костюмы и новинки</h2><div class="grid">${news.map(cardHtml).join('')}</div>
@@ -978,8 +980,8 @@ function admSetup() {
   ${['ozon', 'cdek'].map(k => `<p style="margin:6px 0"><b>${k === 'ozon' ? 'Ozon' : 'СДЭК'}</b></p><div class="two" style="grid-template-columns:repeat(3,minmax(0,1fr))"><div class="field"><label>База, ₽</label><input class="inp" type="number" data-set="${k}.base" value="${s[k].base}"></div><div class="field"><label>За км, ₽</label><input class="inp" type="number" step="0.005" data-set="${k}.perKm" value="${s[k].perKm}"></div><div class="field"><label>Доп. вещь, ₽</label><input class="inp" type="number" data-set="${k}.perItem" value="${s[k].perItem}"></div></div>`).join('')}
   <div class="field"><label for="d2">Доплата за удалённые регионы, ₽</label><input class="inp" id="d2" type="number" data-set="remoteExtra" value="${s.remoteExtra}"></div>
   <p class="small muted">Пример: ${esc(s.origin)} → ${s.origin === 'Москва' ? 'Иркутск' : 'Москва'}, Ozon, 1 вещь: ${rub(delivery('ozon', s.origin === 'Москва' ? 'Иркутск' : 'Москва', [{ pid: 'yosh', qty: 1 }])?.full || 0)}.</p></div>
-  <div class="box" style="margin-top:12px"><h3>Возврат</h3><div class="seg" style="margin:8px 0 6px"><button class="${s.returns.mode !== 'law' ? 'on' : ''}" data-rmode="paid">Без возврата + гарантия</button><button class="${s.returns.mode === 'law' ? 'on' : ''}" data-rmode="law">7 дней на всё</button></div>
-  <p class="small muted">${s.returns.mode !== 'law' ? 'Возврат не предусмотрен; покупатель может добавить «Гарантию возврата» на весь заказ. Перед запуском проверьте этот вариант у юриста.' : 'Возврат 7 дней на все товары, платная опция — расширенный возврат с доставкой за ваш счёт.'}</p>
+  <div class="box" style="margin-top:12px"><h3>Возврат</h3><div class="seg" style="margin:8px 0 6px"><button class="${s.returns.mode !== 'law' ? 'on' : ''}" data-rmode="paid">Без возврата + гарантия</button><button class="${s.returns.mode === 'law' ? 'on' : ''}" data-rmode="law">14 дней на всё</button></div>
+  <p class="small muted">${s.returns.mode !== 'law' ? 'Возврат не предусмотрен; покупатель может добавить «Гарантию возврата» на весь заказ. Перед запуском проверьте этот вариант у юриста.' : 'Возврат 14 дней на все товары, платная опция — расширенный возврат с доставкой за ваш счёт.'}</p>
   <div class="switch"><span>Предлагать платную опцию при оформлении</span><input type="checkbox" data-set="returns.extOn" ${s.returns.extOn ? 'checked' : ''}></div>
   <div class="two"><div class="field"><label>Цена, ₽</label><input class="inp" type="number" min="0" data-set="returns.extPrice" value="${s.returns.extPrice}"></div><div class="field"><label>Дней на возврат</label><input class="inp" type="number" min="7" data-set="returns.extDays" value="${s.returns.extDays}"></div></div></div>
   <div class="box" style="margin-top:12px"><h3>Бонусы</h3><div class="switch"><span>Бонусная программа включена</span><input type="checkbox" data-set="bonus.on" ${s.bonus.on ? 'checked' : ''}></div>
@@ -1124,6 +1126,7 @@ document.addEventListener('click', e => {
   if (t.dataset.admto) { adm = t.dataset.admto; admQ = ''; if (t.dataset.of) ordF = t.dataset.of; render(); window.scrollTo({ top: 0 }); return; }
   if (t.dataset.policy) return openPolicy();
   if (t.dataset.notify) return openNotify();
+  if (t.dataset.notihide) { ls.set('desire_notif_hide', 1); return render(); }
   if (t.dataset.consent) { if (t.dataset.consent === 'reset') { try { localStorage.removeItem(CONSENT); } catch {} toast('Выберите настройки cookie внизу экрана'); document.querySelectorAll('.sheetbg [data-close]').forEach(b => b.click()); return consentBanner(); } ls.set(CONSENT, t.dataset.consent); document.getElementById('cookie')?.remove(); if (t.dataset.consent === 'all') loadMetrika(); return; }
   if (t.id === 'chatBtn') return openContact('');
   if (t.dataset.go) return go(t.dataset.go);
@@ -1244,6 +1247,12 @@ async function deepLink(h) {
 deepLink(h0);
 window.addEventListener('hashchange', () => deepLink(location.hash.slice(1)));
 setTimeout(() => { consentBanner(); loadMetrika(); }, 800);
+// Один раз предлагаем уведомления — не сразу, а когда покупатель уже осмотрелся
+setTimeout(function askNotify() {
+  if (!SB || notifOn || ls.get('desire_notif_asked') || staff) return;
+  if (document.querySelector('.sheetbg') || document.getElementById('cookie') || route === 'admin') return setTimeout(askNotify, 15000);
+  ls.set('desire_notif_asked', 1); openNotify('first');
+}, 25000);
 if (newSession) track('visit', { meta: { standalone: standalone, ref: (document.referrer || '').slice(0, 80), medium: visitSrc?.medium || '', campaign: visitSrc?.campaign || '' } });
 render();
 if (SB) {
