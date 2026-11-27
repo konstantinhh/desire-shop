@@ -1,6 +1,6 @@
 {
-const APP_VERSION = '1.9';
-/* ===== Хранилище (для теста — в браузере; на Netlify заменить на Supabase/Firebase через Store.load/save) ===== */
+const APP_VERSION = '1.9.1';
+/* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
 const ls = {
@@ -1078,7 +1078,6 @@ async function installAction(a) {
   if (a === 'go' && installEvt) { installEvt.prompt(); try { await installEvt.userChoice; } catch {} installEvt = null; render(); }
 }
 if ('serviceWorker' in navigator && location.protocol === 'https:' && window.top === window.self) { try { navigator.serviceWorker.register('/sw.js').catch(() => {}); } catch {} }
-if (/netlify\.app$/.test(location.hostname)) document.body.classList.add('nf');
 const h0 = location.hash.slice(1); if (TABS.some(x => x[0] === h0)) route = h0;
 setTimeout(() => { consentBanner(); loadMetrika(); }, 800);
 if (newSession) track('visit', { meta: { standalone: standalone, ref: (document.referrer || '').slice(0, 80), medium: visitSrc?.medium || '', campaign: visitSrc?.campaign || '' } });
