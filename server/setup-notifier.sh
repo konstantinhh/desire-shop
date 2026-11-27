@@ -57,7 +57,7 @@ volumes:
   notifier_data:
 EOF
 # Раз в 5 минут: забрать изменения с GitHub; сервис уведомлений пересобирается, только если его код изменился
-( crontab -l 2>/dev/null | grep -v 'desire/shop' ; echo "*/5 * * * * cd $D/shop && git pull -q && cd $D && docker compose up -d --build notifier >/dev/null 2>&1" ) | crontab -
+{ crontab -l 2>/dev/null | grep -v 'desire/shop' || true; echo "*/5 * * * * cd $D/shop && git pull -q && cd $D && docker compose up -d --build notifier >/dev/null 2>&1"; } | crontab -
 
 echo "4/4  Запускаем сервис уведомлений…"
 cd "$D" && docker compose up -d --build notifier
