@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '2.0';
+const APP_VERSION = '2.0.1';
 /* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -481,6 +481,7 @@ function openProduct(id) {
       <div style="display:flex;gap:10px;align-items:center;margin:14px 0"><div class="qty"><button data-pq="-1" aria-label="Меньше">−</button><span>${qty}</span><button data-pq="1" aria-label="Больше">+</button></div>
       <button class="btn" style="flex:1" id="add" ${st ? '' : 'disabled'}>В корзину</button>
       <button class="icon fav ${favs.includes(p.id) ? 'on' : ''}" style="position:static;background:var(--fill);width:50px;height:50px;border-radius:14px" data-fav="${esc(p.id)}" aria-label="В избранное">${svg('heart')}</button></div>
+      ${cart.length ? (n => `<button class="btn w sec" data-tocart="1" style="margin:-4px 0 10px">Перейти в корзину · ${n} ${plural(n, 'вещь', 'вещи', 'вещей')}</button>`)(cart.reduce((a, i) => a + i.qty, 0)) : ''}
       ${p.freeShip ? '<div class="note">Доставка этой модели — бесплатно</div>' : ''}
       <button class="btn sec w sm" style="margin-top:10px" data-contact="${esc(`Здравствуйте! Подскажите по размеру: ${p.name}, цвет ${color}.`)}">${svg('chat')} Спросить про размер</button>
       <h3 style="margin-top:18px">Описание</h3><p style="margin:0 0 10px">${esc(p.desc)}</p>
@@ -497,7 +498,8 @@ function openProduct(id) {
       else if (t.dataset.size) { size = t.dataset.size; qty = 1; draw(); track(stockOf(p, color, size) ? 'select' : 'oos', { pid: p.id, color, size }); }
       else if (t.dataset.wish) openWish(p, color, size);
       else if (t.dataset.pq) { qty = Math.max(1, Math.min(stockOf(p, color, size) || 1, qty + +t.dataset.pq)); draw(); }
-      else if (t.id === 'add') { if (addToCart(p.id, color, size, qty)) { toast(`${p.name} · ${color} — в корзине`); track('cart_add', { pid: p.id, color, size, val: priceOf(p) * qty }); } }
+      else if (t.id === 'add') { if (addToCart(p.id, color, size, qty)) { toast(`${p.name} · ${color} — в корзине`); track('cart_add', { pid: p.id, color, size, val: priceOf(p) * qty }); draw(); } }
+      else if (t.dataset.tocart) { api.close(); setTimeout(() => go('cart'), 250); }
       else if (t.dataset.fav) { toggleFav(p.id); draw(); }
       else if (t.dataset.open) { api.close(); setTimeout(() => openProduct(t.dataset.open), 320); }
       else if (t.dataset.goreviews) api.el.querySelector('#reviews')?.scrollIntoView({ behavior: 'smooth' });
