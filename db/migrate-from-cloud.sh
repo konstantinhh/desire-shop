@@ -25,7 +25,7 @@ echo
 echo "2/5  Подключение к старой базе (облако Supabase)."
 echo "     Вставьте строку Session pooler из Supabase → Connect (вместе с [YOUR-PASSWORD], как есть):"
 read -r OLD_URI
-OLD_URI="${OLD_URI//:\[YOUR-PASSWORD\]/}"
+OLD_URI="$(printf %s "$OLD_URI" | tr -d '[:space:]' | sed -E 's#:\[[^]]*\]@#@#')"   # убираем заглушку [YOUR-...PASSWORD]
 read -r -s -p "     Пароль базы данных облачного Supabase (символы не видны при вводе): " OLD_PW; echo
 docker exec -e PGPASSWORD="$OLD_PW" supabase-db psql "$OLD_URI" -Atqc "select 'Подключились, заказов в облаке: ' || count(*) from public.orders" \
   || { echo "Не удалось подключиться. Проверьте строку и пароль."; exit 1; }
