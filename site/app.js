@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '2.5.9';
+const APP_VERSION = '2.6.0';
 /* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -172,6 +172,18 @@ const stockOf = (p, c, s) => p.stock?.[c + '|' + s] ?? 0;
 const totalStock = p => p.colors.reduce((a, c) => a + p.sizes.reduce((b, s) => b + stockOf(p, c, s), 0), 0);
 const coverOf = (p, color) => (color && p.photos.find(f => f.color === color)?.src) || p.photos[0]?.src || '';
 const visible = () => DB.products.filter(p => !p.hidden);
+/* ===== Два бренда: DESIRE (одежда) и BiWabi (товары для дома). Корзина и оформление общие ===== */
+const BW = 'biwabi', BRANDS = { desire: 'DESIRE', biwabi: 'BiWabi' };
+const brandOf = p => p?.brand === BW ? BW : 'desire';
+const isBW = p => brandOf(p) === BW;
+const itemBrand = i => i.bw || isBW(byId(i.pid)) ? BW : 'desire';
+const vt = (c, s) => [c, s].filter(x => x && x !== 'Стандарт').join(' · ');   // «Стандарт» — единственный вариант у товаров без цветов
+const catsOf = b => { const bc = SEED.bwCategories || []; return b === BW ? bc : DB.categories.filter(c => !bc.includes(c)); };
+let brand = ls.get('desire_brand') === BW ? BW : 'desire';
+const shown = () => visible().filter(p => brandOf(p) === brand);
+const logoHtml = b => `<i class="lg lg-${b}" role="img" aria-label="${BRANDS[b]}"></i>`;
+const brandSw = (cur, attr) => `<div class="bsw">${['desire', BW].map(b => `<button class="${cur === b ? 'on' : ''}" data-${attr}="${b}" aria-pressed="${cur === b}" aria-label="${BRANDS[b]}">${logoHtml(b)}</button>`).join('<span class="bsep"></span>')}</div>`;
+function setBrand(b) { brand = b === BW ? BW : 'desire'; ls.set('desire_brand', brand); if (catFilter && !catsOf(brand).includes(catFilter)) catFilter = ''; }
 const priceHtml = p => { const n = priceOf(p), o = oldOf(p); return `<span class="price ${o ? 'sale' : ''}">${rub(n)}</span>${o ? `<span class="old">${rub(o)}</span>` : ''}`; };
 
 /* ===== Доставка: расстояние от склада до города × тариф службы ===== */
@@ -184,10 +196,10 @@ function delivery(service, cityName, items) {
   let cost = t.base + t.perKm * d + t.perItem * Math.max(0, qty - 1) + (to.remote ? DB.settings.remoteExtra : 0);
   cost = Math.round(cost / 10) * 10;
   const allFree = items.length && items.every(i => byId(i.pid)?.freeShip);
-  const fromN = +DB.settings.freeFromItems;
+  const fromN = +DB.settings.freeFromItems, qtyD = items.filter(i => !isBW(byId(i.pid))).reduce((a, i) => a + i.qty, 0);   // салфетки BiWabi не участвуют в «бесплатно от N шт.»
   let free = '';
   if (allFree) free = 'Бесплатная доставка для этих моделей';
-  else if (fromN > 0 && qty >= fromN) free = `Бесплатно от ${fromN} шт.`;
+  else if (fromN > 0 && qtyD >= fromN) free = `Бесплатно от ${fromN} шт. одежды`;
   const days = service === 'ozon' ? [2 + Math.round(d / 900), 4 + Math.round(d / 800)] : [2 + Math.round(d / 1100), 3 + Math.round(d / 900)];
   return { cost: free ? 0 : cost, full: cost, free, dist: Math.round(d), days, remote: to.remote };
 }
@@ -236,6 +248,7 @@ function go(r) {
   route = r; if (location.hash.slice(1) !== r) history.replaceState(null, '', '#' + r); render(); window.scrollTo({ top: 0 }); }
 function render() {
   renderTabs();
+  const lg = $('#logo'); if (lg && lg.dataset.b !== brand) { lg.dataset.b = brand; lg.innerHTML = logoHtml(brand); }
   const v = $('#view');
   if (loading || loadErr) { v.innerHTML = `<div class="empty"><b>${loadErr ? 'Ошибка' : 'Загрузка…'}</b>${esc(loadErr)}</div>`; return; }
   if (SB && !DB.products.length && (route === 'home' || route === 'catalog')) { v.innerHTML = `<div class="empty"><b>Каталог ещё не загружен в базу</b>Сотрудник: Профиль → Вход для сотрудников → Настройки → «Загрузить каталог в базу»</div><div style="text-align:center"><button class="btn sec" data-go="profile">Перейти в профиль</button></div>`; v.onclick = v.oninput = v.onchange = null; return; }
@@ -418,43 +431,52 @@ const cardHtml = p => {
   return `<div class="card"><button data-open="${esc(p.id)}" aria-label="${esc(p.name)}"><div class="im"><img loading="lazy" src="${esc(coverOf(p))}" alt=""></div>
   ${!st ? '<span class="badge">Нет в наличии</span>' : o ? `<span class="badge r">−${Math.round((1 - priceOf(p) / o) * 100)}%</span>` : p.isNew ? '<span class="badge">Новинка</span>' : ''}
   <div class="b"><span class="n">${esc(p.name)}</span><span class="c">${esc(p.cat)}${(r => r ? ` · <span class="rt">★ ${r.avg.toFixed(1)} <i>(${r.n})</i></span>` : '')(ratingOf(p.id))}</span><span>${priceHtml(p)}</span>
-  <span class="dots">${p.colors.slice(0, 7).map(c => `<i class="dot" style="background:${colorCss(c)}"></i>`).join('')}</span></div></button>
+  ${isBW(p) ? `<span class="c">${esc(p.sizes[0] || '')}</span>` : `<span class="dots">${p.colors.slice(0, 7).map(c => `<i class="dot" style="background:${colorCss(c)}"></i>`).join('')}</span>`}</div></button>
   <button class="fav ${favs.includes(p.id) ? 'on' : ''}" data-fav="${esc(p.id)}" aria-label="В избранное">${svg('heart')}</button></div>`;
 };
 
 /* ===== Экраны покупателя ===== */
 function viewHome() {
-  const camp = DB.campaigns.filter(c => c.active);
-  const news = visible().filter(p => p.isNew || p.cat === 'Костюмы').slice(0, 8);
-  const sale = visible().filter(p => oldOf(p)).slice(0, 8);
+  const camp = DB.campaigns.filter(c => c.active && (c.cat ? catsOf(brand).includes(c.cat) : (c.productIds || []).some(id => brandOf(byId(id)) === brand)));
+  const campH = camp.map(c => `<div class="promo"><b>${esc(c.title)}</b><span>${esc(c.text)}</span>${c.cat ? `<button class="btn sm sec" data-cat="${esc(c.cat)}">Смотреть</button>` : ''}</div>`).join('');
+  const notiH = SB && !notifOn && !ls.get('desire_notif_hide') ? `<div class="notibox"><span class="ni">${svg('bell')}</span><div class="f"><b>Узнавайте первыми</b><span>Новинки, скидки и статус заказа — в Telegram или уведомлениями на телефоне</span></div><button class="btn sm" data-notify="1">Подключить</button><button class="x" data-notihide="1" aria-label="Скрыть">${svg('close')}</button></div>` : '';
+  const chips = `<h2>Категории</h2><div class="chips">${catsOf(brand).map(c => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>`;
+  const all = shown(), sale = all.filter(p => oldOf(p)).slice(0, 8);
+  const saleH = sale.length ? `<h2>Скидки</h2><div class="grid">${sale.map(cardHtml).join('')}</div>` : '';
+  if (brand === BW) {
+    const h = ['bw-four', 'bw-smart'].map(byId).filter(p => p && !p.hidden);
+    return `${installBanner(false)}${brandSw(brand, 'brand')}<section class="hero bwh"><div class="tx"><span class="muted small">Товары для дома от DESIRE</span><span class="hlogo">${logoHtml(BW)}</span><p>Мягкие салфетки и тряпочки для уборки — с ними дом сияет, а уборка занимает меньше времени. Добавляйте к заказу одежды: приедут одной посылкой.</p><div><button class="btn" data-go="catalog">Смотреть всё</button></div></div>
+    <div class="ph">${h.map(p => `<button data-open="${p.id}"><img src="${esc(coverOf(p))}" alt="${esc(p.name)}"></button>`).join('')}</div></section>
+    ${campH}${notiH}${chips}${saleH}<h2>Для уборки и кухни</h2><div class="grid">${all.map(cardHtml).join('')}</div>${aboutHtml()}${howHtml()}`;
+  }
+  const news = all.filter(p => p.isNew || p.cat === 'Костюмы').slice(0, 8);
   const h = ['yosh', 'star'].map(byId).filter(Boolean);
-  return `${installBanner(false)}<section class="hero"><div class="tx"><span class="muted small">Каталог осень–зима 2026</span><b>DESIRE</b><p>Костюмы, свитшоты и базовые вещи, которые носят каждый день. Доставка в пункты Ozon и СДЭК по всей России.</p><div><button class="btn" data-go="catalog">Смотреть каталог</button></div></div>
+  return `${installBanner(false)}${brandSw(brand, 'brand')}<section class="hero"><div class="tx"><span class="muted small">Каталог осень–зима 2026</span><b>DESIRE</b><p>Костюмы, свитшоты и базовые вещи, которые носят каждый день. Доставка в пункты Ozon и СДЭК по всей России.</p><div><button class="btn" data-go="catalog">Смотреть каталог</button></div></div>
   <div class="ph">${h.map(p => `<button data-open="${p.id}"><img src="${esc(coverOf(p))}" alt="${esc(p.name)}"></button>`).join('')}</div></section>
-  ${camp.map(c => `<div class="promo"><b>${esc(c.title)}</b><span>${esc(c.text)}</span>${c.cat ? `<button class="btn sm sec" data-cat="${esc(c.cat)}">Смотреть</button>` : ''}</div>`).join('')}
-  ${SB && !notifOn && !ls.get('desire_notif_hide') ? `<div class="notibox"><span class="ni">${svg('bell')}</span><div class="f"><b>Узнавайте первыми</b><span>Новинки, скидки и статус заказа — в Telegram или уведомлениями на телефоне</span></div><button class="btn sm" data-notify="1">Подключить</button><button class="x" data-notihide="1" aria-label="Скрыть">${svg('close')}</button></div>` : ''}
-  <h2>Категории</h2><div class="chips">${DB.categories.map(c => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
-  ${sale.length ? `<h2>Скидки</h2><div class="grid">${sale.map(cardHtml).join('')}</div>` : ''}
-  <h2>Костюмы и новинки</h2><div class="grid">${news.map(cardHtml).join('')}</div>
-  <section class="about"><div class="ab-tx"><span class="muted small">О нас</span><h2 style="margin:6px 0 10px">DESIRE — 13 лет с вами</h2>
-  <p>Мы начинали в Иркутске и уже 13 лет одеваем девушек по всей России, которые любят удобную и красивую одежду на каждый день. Всю нашу линейку шьём сами — на собственном производстве, небольшими партиями.</p>
-</div>
-  <div class="ab-st"><div><b>13</b><span>лет с любимыми покупательницами</span></div><div><b>Свой</b><span>пошив всей линейки</span></div></div></section>
-  <h2>Как мы работаем</h2><div class="stack3">
-  <div class="box"><h3>Доставка в ПВЗ</h3><p class="muted small" style="margin:0">Ozon или СДЭК. Стоимость считается автоматически по городу. От ${DB.settings.freeFromItems} шт. — бесплатно.</p></div>
-  <div class="box"><h3>Оплата по QR</h3><p class="muted small" style="margin:0">Сканируйте код в приложении любого банка — сумма подставится сама.</p></div>
-  <div class="box"><h3>Помощь с размером</h3><p class="muted small" style="margin:0">Напишите нам — подскажем по посадке.</p><button class="btn sm sec" style="margin-top:10px" data-contact="">Написать</button></div>
-  <div class="box"><h3>Условия возврата</h3><button class="btn sm sec" style="margin-top:6px" data-returns="1">Подробнее</button></div></div>`;
+  ${campH}${notiH}${chips}${saleH}
+  <h2>Костюмы и новинки</h2><div class="grid">${news.map(cardHtml).join('')}</div>${aboutHtml()}${howHtml()}`;
 }
+const aboutHtml = () => `<section class="about"><div class="ab-tx"><span class="muted small">О нас</span><h2 style="margin:6px 0 10px">DESIRE — 13 лет с вами</h2>
+  <p>Мы начинали в Иркутске и уже 13 лет одеваем девушек по всей России, которые любят удобную и красивую одежду на каждый день. Всю нашу линейку шьём сами — на собственном производстве, небольшими партиями.</p>
+  <p>А ещё у нас появилось второе направление — <button class="lnk" data-brand="${BW}">BiWabi</button>, товары для дома. Мягкие салфетки и тряпочки для уборки мы выбирали так же придирчиво, как ткани для любимых костюмов: чтобы были приятными в руках, красивыми и правда помогали. Пусть уютно будет не только в одежде, но и дома.</p>
+</div>
+  <div class="ab-st"><div><b>13</b><span>лет с любимыми покупательницами</span></div><div><b>Свой</b><span>пошив всей линейки</span></div><div><b>2</b><span>направления: одежда и уют дома</span></div></div></section>`;
+const howHtml = () => `<h2>Как мы работаем</h2><div class="stack3">
+  <div class="box"><h3>Доставка в ПВЗ</h3><p class="muted small" style="margin:0">Ozon или СДЭК. Стоимость считается автоматически по городу. От ${DB.settings.freeFromItems} шт. одежды — бесплатно.${brand === BW ? ' Товары для дома приедут в одной посылке с одеждой.' : ''}</p></div>
+  <div class="box"><h3>Оплата по QR</h3><p class="muted small" style="margin:0">Сканируйте код в приложении любого банка — сумма подставится сама.</p></div>
+  <div class="box"><h3>${brand === BW ? 'Поможем с выбором' : 'Помощь с размером'}</h3><p class="muted small" style="margin:0">${brand === BW ? 'Напишите нам — подскажем, какая салфетка для чего.' : 'Напишите нам — подскажем по посадке.'}</p><button class="btn sm sec" style="margin-top:10px" data-contact="">Написать</button></div>
+  <div class="box"><h3>Условия возврата</h3><button class="btn sm sec" style="margin-top:6px" data-returns="1">Подробнее</button></div></div>`;
 function viewCatalog() {
-  let list = visible();
+  if (catFilter && !catsOf(brand).includes(catFilter)) catFilter = '';
+  let list = shown();
   if (catFilter) list = list.filter(p => p.cat === catFilter);
   if (query) { const q = query.toLowerCase(); list = list.filter(p => (p.name + ' ' + p.cat + ' ' + p.colors.join(' ') + ' ' + p.desc).toLowerCase().includes(q)); }
   if (sortBy === 'asc') list = [...list].sort((a, b) => priceOf(a) - priceOf(b));
   if (sortBy === 'desc') list = [...list].sort((a, b) => priceOf(b) - priceOf(a));
-  return `<h1>${esc(catFilter || 'Каталог')}</h1>
+  return `${brandSw(brand, 'brand')}<h1>${esc(catFilter || (brand === BW ? 'Товары для дома' : 'Каталог'))}</h1>
   <input class="inp" id="q" type="search" placeholder="Поиск: модель, цвет, категория" value="${esc(query)}" style="margin-bottom:10px">
-  <div class="chips"><button class="chip ${!catFilter ? 'on' : ''}" data-cat="">Все</button>${DB.categories.map(c => `<button class="chip ${catFilter === c ? 'on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
-  <div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0 12px"><span class="muted small">${list.length} ${plural(list.length, 'модель', 'модели', 'моделей')}</span>
+  <div class="chips"><button class="chip ${!catFilter ? 'on' : ''}" data-cat="">Все</button>${catsOf(brand).map(c => `<button class="chip ${catFilter === c ? 'on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0 12px"><span class="muted small">${list.length} ${brand === BW ? plural(list.length, 'товар', 'товара', 'товаров') : plural(list.length, 'модель', 'модели', 'моделей')}</span>
   <select class="inp" id="sort" style="width:auto;height:38px;font-size:14px"><option value="pop">По умолчанию</option><option value="asc" ${sortBy === 'asc' ? 'selected' : ''}>Сначала дешевле</option><option value="desc" ${sortBy === 'desc' ? 'selected' : ''}>Сначала дороже</option></select></div>
   ${list.length ? `<div class="grid">${list.map(cardHtml).join('')}</div>` : `<div class="empty"><b>Ничего не нашлось</b>Попробуйте другой запрос</div>`}`;
 }
@@ -468,13 +490,35 @@ function viewCart() {
   if (!items.length) return `<h1>Корзина</h1><div class="empty"><b>Корзина пуста</b>Добавьте вещи из каталога</div><div style="text-align:center"><button class="btn" data-go="catalog">В каталог</button></div>`;
   const sub = subtotal(), disc = promoDiscount(sub);
   const pr = promoApplied && DB.promos.find(x => x.code === promoApplied);
-  return `<h1>Корзина</h1><div class="list">${items.map((i, k) => { const p = byId(i.pid); return `<div class="row"><img class="thumb" src="${esc(coverOf(p, i.color))}" alt=""><div class="f"><b>${esc(p.name)}</b><div class="muted small">${esc(i.color)} · ${esc(i.size)}</div><div>${rub(priceOf(p) * i.qty)}</div></div>
+  return `<h1>Корзина</h1><div class="list">${items.map((i, k) => { const p = byId(i.pid); return `<div class="row"><img class="thumb" src="${esc(coverOf(p, i.color))}" alt=""><div class="f"><b>${esc(p.name)}</b><div class="muted small">${esc(vt(i.color, i.size))}</div><div>${rub(priceOf(p) * i.qty)}</div></div>
     <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px"><div class="qty"><button data-q="${k}" data-d="-1" aria-label="Меньше">−</button><span>${i.qty}</span><button data-q="${k}" data-d="1" aria-label="Больше">+</button></div><button class="small muted" data-rm="${k}">Удалить</button></div></div>`; }).join('')}</div>
+  ${giftHtml()}${upsellHtml()}
   <h2>Промокод</h2><div style="display:flex;gap:8px"><input class="inp" id="promo" placeholder="Например, DESIRE10" value="${esc(promoApplied || '')}" autocapitalize="characters"><button class="btn sec" id="applyPromo">Применить</button></div>
   ${pr && !disc ? `<p class="small sale">Промокод действует от ${rub(pr.minSum)}</p>` : ''}
   <div class="box" style="margin-top:18px"><div class="sum"><span>Товары</span><span>${rub(sub)}</span></div>${disc ? `<div class="sum sale"><span>Промокод ${esc(promoApplied)}</span><span>−${rub(disc)}</span></div>` : ''}
   <div class="sum muted"><span>Доставка</span><span>рассчитаем на следующем шаге</span></div><div class="sum t"><span>Итого</span><span>${rub(sub - disc)}</span></div>
   <button class="btn w" id="checkout" style="margin-top:12px">Оформить заказ</button></div>`;
+}
+/* Блок «Добавьте к заказу» и подарок за сумму (настраиваются: панель → Ещё → Настройки → BiWabi) */
+function upsellHtml() {
+  const s = DB.settings.bw || {}; if (!s.upsellOn) return '';
+  const inCart = new Set(cart.map(i => i.pid));
+  const l = visible().filter(p => isBW(p) && !inCart.has(p.id) && totalStock(p) > 0).slice(0, 8);
+  if (!l.length) return '';
+  return `<div class="uph"><h2>${esc(s.upsellTitle || 'Добавьте к заказу')}</h2>${logoHtml(BW)}</div><div class="ups">${l.map(p => `<div class="up"><button class="upi" data-open="${esc(p.id)}" aria-label="${esc(p.name)}"><img loading="lazy" src="${esc(coverOf(p))}" alt=""></button><b>${esc(p.name)}</b><span class="small muted">${esc(p.sizes[0] || '')}</span><div class="upb"><span>${priceHtml(p)}</span><button class="plus" data-ups="${esc(p.id)}" aria-label="Добавить ${esc(p.name)} в корзину">+</button></div></div>`).join('')}</div>`;
+}
+function giftInfo() {
+  const s = DB.settings.bw || {}; if (!s.giftOn || !(+s.giftFrom > 0)) return null;
+  const p = byId(s.giftPid); if (!p || p.hidden) return null;
+  const used = (c, z) => cart.filter(i => i.pid === p.id && i.color === c && i.size === z).reduce((a, i) => a + i.qty, 0);
+  let v = null; for (const c of p.colors) for (const z of p.sizes) if (!v && stockOf(p, c, z) - used(c, z) > 0) v = [c, z];
+  if (!v) return null;
+  const sub = subtotal(); return { p, color: v[0], size: v[1], ok: sub >= +s.giftFrom, left: +s.giftFrom - sub, text: (s.giftText || '').trim() || `${p.name} в подарок` };
+}
+function giftHtml() {
+  const g = giftInfo(); if (!g) return '';
+  return g.ok ? `<div class="gift"><img class="thumb" src="${esc(coverOf(g.p))}" alt=""><div class="f"><b>${esc(g.text)}</b><div class="small muted">${esc(g.p.name)} — положим в посылку</div></div><span class="price">0 ₽</span></div>`
+    : `<div class="note gnote">До подарка осталось <b>${rub(g.left)}</b>: ${esc(g.text)}</div>`;
 }
 const STATUS = { awaiting: 'Ждёт подтверждения оплаты', paid: 'Оплачен', assembling: 'Собирается', shipped: 'Отправлен', done: 'Получен', cancelled: 'Отменён' };
 function viewProfile() {
@@ -518,24 +562,24 @@ function openProduct(id) {
   sheet(p.name, '', api => {
     const draw = () => {
       const photos = [...p.photos.filter(f => f.color === color), ...p.photos.filter(f => f.color !== color)];
-      const st = stockOf(p, color, size);
+      const st = stockOf(p, color, size), bw = isBW(p);
       api.set(`<div class="gal" id="gal">${photos.map(f => `<img src="${esc(f.src)}" alt="${esc(p.name + ' ' + f.color)}">`).join('')}</div>
       <div class="sh-b"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-top:16px"><h1 style="margin:0;font-size:30px">${esc(p.name)}</h1><span style="font-size:22px">${priceHtml(p)}</span></div>
       <p class="muted small" style="margin:4px 0 0">${esc(p.cat)}${p.tag ? ' · ' + esc(p.tag) : ''}${campaignFor(p) ? ' · ' + esc(campaignFor(p).title) : ''}</p>
       ${(r => r ? `<button class="rlink" data-goreviews="1">${stars(r.avg)} <b>${r.avg.toFixed(1)}</b> <span class="muted">· ${r.n} ${plural(r.n, 'отзыв', 'отзыва', 'отзывов')}</span></button>` : '')(ratingOf(p.id))}
-      <h3 style="margin-top:18px">Цвет: <span class="muted">${esc(color)}</span></h3>
-      <div class="sw">${p.colors.map(c => { const has = p.sizes.some(s => stockOf(p, c, s) > 0); return `<button class="swb ${c === color ? 'on' : ''}" data-color="${esc(c)}" ${has ? '' : 'data-na="1"'}><i style="background:${colorCss(c)}"></i>${esc(c)}</button>`; }).join('')}</div>
-      <h3 style="margin-top:16px">Размер</h3><div class="sw">${p.sizes.map(s => `<button class="swb ${s === size ? 'on' : ''}" data-size="${esc(s)}" style="padding-left:14px" ${stockOf(p, color, s) ? '' : 'data-na="1"'}>${esc(s)}</button>`).join('')}</div>
-      <p class="small ${st && st <= 2 ? 'low' : 'muted'}">${st ? (st <= 2 ? `Осталось ${st} шт.` : 'В наличии') : `Нет в наличии: ${esc(color)}, ${esc(size)}`}</p>
+      ${bw && p.colors.length < 2 ? '' : `<h3 style="margin-top:18px">Цвет: <span class="muted">${esc(color)}</span></h3>
+      <div class="sw">${p.colors.map(c => { const has = p.sizes.some(s => stockOf(p, c, s) > 0); return `<button class="swb ${c === color ? 'on' : ''}" data-color="${esc(c)}" ${has ? '' : 'data-na="1"'}><i style="background:${colorCss(c)}"></i>${esc(c)}</button>`; }).join('')}</div>`}
+      <h3 style="margin-top:16px">${bw ? 'Формат' : 'Размер'}</h3><div class="sw">${p.sizes.map(s => `<button class="swb ${s === size ? 'on' : ''}" data-size="${esc(s)}" style="padding-left:14px" ${stockOf(p, color, s) ? '' : 'data-na="1"'}>${esc(s)}</button>`).join('')}</div>
+      <p class="small ${st && st <= 2 ? 'low' : 'muted'}">${st ? (st <= 2 ? `Осталось ${st} шт.` : 'В наличии') : `Нет в наличии: ${esc(vt(color, size) || size)}`}</p>
       ${st ? '' : `<button class="btn w blue sm" data-wish="1" style="margin-bottom:6px">Сообщить о поступлении</button>`}
       <div style="display:flex;gap:10px;align-items:center;margin:14px 0"><div class="qty"><button data-pq="-1" aria-label="Меньше">−</button><span>${qty}</span><button data-pq="1" aria-label="Больше">+</button></div>
       <button class="btn" style="flex:1" id="add" ${st ? '' : 'disabled'}>В корзину</button>
       <button class="icon fav ${favs.includes(p.id) ? 'on' : ''}" style="position:static;background:var(--fill);width:50px;height:50px;border-radius:14px" data-fav="${esc(p.id)}" aria-label="В избранное">${svg('heart')}</button></div>
       ${cart.length ? (n => `<button class="btn w sec" data-tocart="1" style="margin:-4px 0 10px">Перейти в корзину · ${n} ${plural(n, 'вещь', 'вещи', 'вещей')}</button>`)(cart.reduce((a, i) => a + i.qty, 0)) : ''}
       ${p.freeShip ? '<div class="note">Доставка этой модели — бесплатно</div>' : ''}
-      <div class="two2" style="margin-top:10px"><button class="btn sec sm" data-params="1">Смотреть параметры</button><button class="btn sec sm" data-contact="${esc(`Здравствуйте! Подскажите по размеру: ${p.name}, цвет ${color}.`)}">${svg('chat')} Спросить про размер</button></div>
-      <h3 style="margin-top:18px">Описание</h3><p style="margin:0 0 10px">${esc(p.desc)}</p>
-      <div class="list"><div class="row"><span class="f muted">Состав</span><span class="r">${esc(p.comp)}</span></div><div class="row"><span class="f muted">Размер</span><span class="r">${esc(p.sizes.join(', '))}</span></div>${paramsOf(p).length ? '' : `<div class="row"><span class="f muted">Замеры</span><span class="r">${esc(p.specs)}</span></div>`}</div>
+      ${bw ? `<button class="btn w sec sm" style="margin-top:10px" data-contact="${esc(`Здравствуйте! Вопрос про ${p.name}.`)}">${svg('chat')} Задать вопрос</button>` : `<div class="two2" style="margin-top:10px"><button class="btn sec sm" data-params="1">Смотреть параметры</button><button class="btn sec sm" data-contact="${esc(`Здравствуйте! Подскажите по размеру: ${p.name}, цвет ${color}.`)}">${svg('chat')} Спросить про размер</button></div>`}
+      <h3 style="margin-top:18px">Описание</h3><p style="margin:0 0 10px;white-space:pre-line">${esc(p.desc)}</p>
+      <div class="list"><div class="row"><span class="f muted">Состав</span><span class="r">${esc(p.comp)}</span></div><div class="row"><span class="f muted">${bw ? 'Формат' : 'Размер'}</span><span class="r">${esc(p.sizes.join(', '))}</span></div>${paramsOf(p).length || bw ? '' : `<div class="row"><span class="f muted">Замеры</span><span class="r">${esc(p.specs)}</span></div>`}</div>
       <h3 style="margin-top:18px">Уход</h3><p style="margin:0 0 10px">${esc(careOf(p))}</p>
       <p class="small muted" style="margin:0 0 10px"><button class="lnk" data-returns="1">Условия возврата</button></p>
       ${reviewsHtml(p)}
@@ -549,7 +593,7 @@ function openProduct(id) {
       else if (t.dataset.wish) openWish(p, color, size);
       else if (t.dataset.params) { openParams(p); track('params', { pid: p.id }); }
       else if (t.dataset.pq) { qty = Math.max(1, Math.min(stockOf(p, color, size) || 1, qty + +t.dataset.pq)); draw(); }
-      else if (t.id === 'add') { if (addToCart(p.id, color, size, qty)) { toast(`${p.name} · ${color} — в корзине`); track('cart_add', { pid: p.id, color, size, val: priceOf(p) * qty }); draw(); } }
+      else if (t.id === 'add') { if (addToCart(p.id, color, size, qty)) { toast(`${p.name}${isBW(p) ? '' : ' · ' + color} — в корзине`); track('cart_add', { pid: p.id, color, size, val: priceOf(p) * qty }); draw(); } }
       else if (t.dataset.tocart) { api.close(); setTimeout(() => go('cart'), 250); }
       else if (t.dataset.fav) { toggleFav(p.id); draw(); }
       else if (t.dataset.open) { api.close(); setTimeout(() => openProduct(t.dataset.open), 320); }
@@ -617,7 +661,7 @@ function openCheckout() {
     };
     const dlHtml = d => !f.city ? '' : d ? `<div class="note" style="margin-bottom:12px"><b>${d.cost ? rub(d.cost) : 'Бесплатно'}</b>${d.free ? ` <span class="muted">(${esc(d.free)}, обычно ${rub(d.full)})</span>` : ''} · ${d.days[0]}–${d.days[1]} дн. · ~${d.dist.toLocaleString('ru-RU')} км от склада${d.remote ? '<br>Удалённый регион — включена доплата' : ''}</div>` : `<div class="note" style="margin-bottom:12px">Выберите город из подсказок — так мы рассчитаем доставку</div>`;
     const totHtml = (sub, disc, d) => { const bu = bonusUse(), cf = careFee(), goods = sub - disc - bu; const earn = bonusOn && B.on ? Math.floor(goods * B.earnPct / 100) : 0;
-      return `<div class="sum"><span>Товары</span><span>${rub(sub)}</span></div>${disc ? `<div class="sum sale"><span>Промокод</span><span>−${rub(disc)}</span></div>` : ''}${bu ? `<div class="sum sale"><span>Бонусы</span><span>−${rub(bu)}</span></div>` : ''}${cf ? `<div class="sum"><span>${optName()}</span><span>${rub(cf)}</span></div>` : ''}<div class="sum"><span>Доставка</span><span>${d ? (d.cost ? rub(d.cost) : 'Бесплатно') : '—'}</span></div><div class="sum t"><span>К оплате</span><span>${rub(goods + cf + (d ? d.cost : 0))}</span></div>${earn ? `<p class="small" style="margin:8px 0 0;color:var(--green)">+${rub(earn)} бонусами после получения заказа</p>` : ''}`; };
+      return `<div class="sum"><span>Товары</span><span>${rub(sub)}</span></div>${disc ? `<div class="sum sale"><span>Промокод</span><span>−${rub(disc)}</span></div>` : ''}${bu ? `<div class="sum sale"><span>Бонусы</span><span>−${rub(bu)}</span></div>` : ''}${cf ? `<div class="sum"><span>${optName()}</span><span>${rub(cf)}</span></div>` : ''}${(g => g && g.ok ? `<div class="sum"><span>${esc(g.text)}</span><span>0 ₽</span></div>` : '')(giftInfo())}<div class="sum"><span>Доставка</span><span>${d ? (d.cost ? rub(d.cost) : 'Бесплатно') : '—'}</span></div><div class="sum t"><span>К оплате</span><span>${rub(goods + cf + (d ? d.cost : 0))}</span></div>${earn ? `<p class="small" style="margin:8px 0 0;color:var(--green)">+${rub(earn)} бонусами после получения заказа</p>` : ''}`; };
     const refresh = () => { if (!$('#tot')) return; const d = calc();
       if (f.name.trim() && phoneOk(f.phone)) trackOnce('contacts', {});
       if (d && f.address.trim().length > 4) trackOnce('delivery', { meta: { service: f.service, city: f.city } }); $('#dl').innerHTML = dlHtml(d); $('#tot').innerHTML = totHtml(subtotal(), promoDiscount(subtotal()), d); $('#pay').disabled = !(d && f.address.trim().length > 4 && f.name.trim() && phoneOk(f.phone)); ls.set('desire_form', f); };
@@ -646,9 +690,10 @@ function openCheckout() {
 async function createOrder(f, d, bonusSpent = 0, careFee = 0) {
   const items = cartItems();
   for (const i of items) { const p = byId(i.pid); if (stockOf(p, i.color, i.size) < i.qty) { toast(`${p.name} ${i.color}: осталось ${stockOf(p, i.color, i.size)} шт.`); return null; } }
-  const sub = subtotal(), disc = promoDiscount(sub);
+  const sub = subtotal(), disc = promoDiscount(sub), gift = giftInfo();
   const n = 1001 + DB.orders.length;
-  const o = { id: 'D-' + n, date: Date.now(), status: 'awaiting', items: items.map(i => { const p = byId(i.pid); return { pid: p.id, name: p.name, color: i.color, size: i.size, qty: i.qty, price: priceOf(p), basePrice: p.price, img: coverOf(p, i.color) }; }),
+  const o = { id: 'D-' + n, date: Date.now(), status: 'awaiting', items: [...items.map(i => { const p = byId(i.pid); return { pid: p.id, name: p.name, color: i.color, size: i.size, qty: i.qty, price: priceOf(p), basePrice: p.price, img: coverOf(p, i.color), ...(isBW(p) ? { bw: true } : {}) }; }),
+      ...(gift && gift.ok ? [{ pid: gift.p.id, name: gift.p.name, color: gift.color, size: gift.size, qty: 1, price: 0, basePrice: gift.p.price, img: coverOf(gift.p), gift: true, ...(isBW(gift.p) ? { bw: true } : {}) }] : [])],
     subtotal: sub, discount: disc, promo: disc ? promoApplied : '', delivery: { service: f.service, city: f.city, address: f.address, cost: d.cost, dist: d.dist },
     customer: { name: f.name, phone: f.phone, email: f.email }, comment: f.comment, total: sub - disc - bonusSpent + careFee + d.cost, paidClaimed: false,
     sid: SID, dev: DEV, src: curSrc(), srcFirst: firstSrc?.src || '', bonusSpent, returnCare: careFee > 0, returnCarePrice: careFee, returnCareName: careFee > 0 ? optName() : '', bonusEarned: 0 };
@@ -663,10 +708,10 @@ async function createOrder(f, d, bonusSpent = 0, careFee = 0) {
     }
     o.id = data.id; o.token = data.token;
     myTokens.push({ id: data.id, token: data.token }); ls.set('desire_tokens_v1', myTokens);
-    items.forEach(i => { const p = byId(i.pid); p.stock[i.color + '|' + i.size] -= i.qty; });
+    o.items.forEach(i => { const p = byId(i.pid); if (p) p.stock[i.color + '|' + i.size] -= i.qty; });
     myRemote.unshift(o);
   } else {
-    items.forEach(i => { const p = byId(i.pid); p.stock[i.color + '|' + i.size] -= i.qty; });
+    o.items.forEach(i => { const p = byId(i.pid); if (p) p.stock[i.color + '|' + i.size] -= i.qty; });
     DB.orders.push(o); save(); myOrders.push(o.id); ls.set(MK, myOrders);
   }
   cart = []; promoApplied = null; saveCart(); if (route === 'cart') render();
@@ -715,7 +760,7 @@ function openPay(o) {
 function openOrder(id) {
   const o = (SB ? myRemote : DB.orders).find(x => x.id === id); if (!o) return;
   sheet('Заказ ' + o.id, `<div class="sh-b"><p><span class="st ${o.status}">${STATUS[o.status]}</span></p>
-  <div class="list">${o.items.map(i => `<div class="row"><img class="thumb" src="${esc(i.img)}" alt=""><div class="f"><b>${esc(i.name)}</b><div class="muted small">${esc(i.color)} · ${esc(i.size)} · ${i.qty} шт.</div></div><span class="price">${rub(i.price * i.qty)}</span></div>`).join('')}</div>
+  <div class="list">${o.items.map(i => `<div class="row"><img class="thumb" src="${esc(i.img)}" alt=""><div class="f"><b>${esc(i.name)}</b><div class="muted small">${esc(vt(i.color, i.size))} · ${i.qty} шт.${i.gift ? ' · подарок' : ''}</div></div><span class="price">${rub(i.price * i.qty)}</span></div>`).join('')}</div>
   <div class="box" style="margin-top:12px"><div class="sum"><span>Доставка ${o.delivery.service === 'ozon' ? 'Ozon' : 'СДЭК'}</span><span>${o.delivery.cost ? rub(o.delivery.cost) : 'Бесплатно'}</span></div><div class="small muted">${esc(o.delivery.city)}, ${esc(o.delivery.address)}</div>
   ${o.discount ? `<div class="sum sale"><span>Промокод ${esc(o.promo)}</span><span>−${rub(o.discount)}</span></div>` : ''}<div class="sum t"><span>Итого</span><span>${rub(o.total)}</span></div></div>
   ${o.bonusSpent ? `<p class="small muted">Оплачено бонусами: ${rub(o.bonusSpent)}</p>` : ''}${o.bonusEarned && o.status === 'done' ? `<p class="small" style="color:var(--green)">Начислено бонусов: ${rub(o.bonusEarned)}</p>` : ''}
@@ -732,10 +777,10 @@ const reviewedKey = (oid, pid) => (ls.get(RK) || []).includes(oid + '|' + pid);
 function openReviewForm(o, item) {
   let rating = 5, photos = [];
   sheet('Отзыв: ' + item.name, '', api => {
-    const draw = () => api.set(`<div class="sh-b"><p class="muted small" style="margin-top:4px">${esc(item.color)} · ${esc(item.size)}</p>
+    const draw = () => api.set(`<div class="sh-b"><p class="muted small" style="margin-top:4px">${esc(vt(item.color, item.size))}</p>
       <div class="rate">${[1, 2, 3, 4, 5].map(i => `<button data-rt="${i}" class="${i <= rating ? 'on' : ''}" aria-label="${i} из 5">${svg('star')}</button>`).join('')}</div>
       <div class="field"><label for="r_n">Ваше имя</label><input class="inp" id="r_n" maxlength="40" value="${esc((o.customer?.name || '').split(' ')[0] || '')}"></div>
-      <div class="field"><label for="r_t">Отзыв</label><textarea class="inp" id="r_t" maxlength="2000" placeholder="Как сидит, подошёл ли размер, качество ткани"></textarea></div>
+      <div class="field"><label for="r_t">Отзыв</label><textarea class="inp" id="r_t" maxlength="2000" placeholder="${itemBrand(item) === BW ? 'Как справляется с уборкой, качество, удобство' : 'Как сидит, подошёл ли размер, качество ткани'}"></textarea></div>
       <div class="phs">${photos.map((src, i) => `<div><img src="${esc(src)}" alt=""><button class="x" data-rx="${i}" aria-label="Удалить фото">×</button></div>`).join('')}</div>
       ${photos.length < 3 ? '<label class="btn sec sm" style="margin-top:10px">Добавить фото (до 3)<input type="file" accept="image/*" multiple id="r_up" hidden></label>' : ''}
       <button class="btn w" id="r_send" style="margin-top:16px">Отправить отзыв</button>
@@ -784,33 +829,37 @@ function openStaffLogin() {
 }
 
 /* ===== Панель сотрудника ===== */
-let adm = 'orders', admQ = '', ordF = 'all';
+let adm = 'orders', admQ = '', ordF = 'all', admBrand = 'desire';
+const inAB = p => brandOf(p) === admBrand;
+const ordAB = o => o.items.some(i => !i.gift && itemBrand(i) === admBrand) || (!o.items.some(i => !i.gift) && admBrand === 'desire');
 function viewAdmin() {
   if (!staff) { setTimeout(() => go('profile')); return ''; }
   const today = new Date().toDateString();
-  const td = DB.orders.filter(o => new Date(o.date).toDateString() === today && o.status !== 'cancelled');
-  const low = DB.products.reduce((a, p) => a + p.colors.reduce((b, c) => b + p.sizes.filter(s => stockOf(p, c, s) <= 1).length, 0), 0);
+  const td = DB.orders.filter(o => new Date(o.date).toDateString() === today && o.status !== 'cancelled' && ordAB(o));
+  const tdRev = td.reduce((a, o) => a + o.items.filter(i => itemBrand(i) === admBrand).reduce((b, i) => b + i.price * i.qty, 0), 0);
+  const low = DB.products.filter(inAB).reduce((a, p) => a + p.colors.reduce((b, c) => b + p.sizes.filter(s => stockOf(p, c, s) <= 1).length, 0), 0);
   const pend = DB.reviews.filter(r => r.status === 'pending').length;
   const nw = DB.wishes.filter(w => w.status !== 'done').length;
   const grp = admGroupOf(adm), subs = ADM_GROUPS[grp].filter(k => SB || k !== 'news');
   const lbl = k => ADM_SUB[k] + (k === 'wishes' && nw ? ` (${nw})` : k === 'reviews' && pend ? ` (${pend})` : '');
-  const awaiting = DB.orders.filter(o => o.status === 'awaiting').length;
+  const awaiting = DB.orders.filter(o => o.status === 'awaiting' && ordAB(o)).length;
   return `<div class="admhead"><b>Панель</b><div style="display:flex;gap:8px">${SB ? '<button class="btn sm sec" id="reload">Обновить</button>' : ''}<button class="btn sm" data-go="home">В магазин ›</button></div></div>
-  <div class="kpis mini"><div class="kpi"><span>Сегодня</span><b>${td.length}</b></div><div class="kpi"><span>Выручка</span><b>${rub(td.reduce((a, o) => a + o.total, 0))}</b></div>
+  ${brandSw(admBrand, 'abrand')}
+  <div class="kpis mini"><div class="kpi"><span>Сегодня</span><b>${td.length}</b></div><div class="kpi"><span>Выручка</span><b>${rub(tdRev)}</b></div>
   <button class="kpi" data-admto="orders" data-of="awaiting"><span>К проверке</span><b class="${awaiting ? 'low' : ''}">${awaiting}</b></button><button class="kpi" data-admto="stock"><span>Остаток ≤ 1</span><b class="${low ? 'low' : ''}">${low}</b></button></div>
   ${subs.length > 1 ? `<div class="seg" style="margin:12px 0 16px">${subs.map(k => `<button class="${adm === k ? 'on' : ''}" data-adm="${k}">${lbl(k)}</button>`).join('')}</div>` : '<div style="height:12px"></div>'}
   <div id="admBody">${({ orders: admOrders, products: admProducts, stock: admStock, promo: admPromo, reviews: admReviews, setup: admSetup, stats: admStats, wishes: admWishes, news: admNews })[adm]()}</div>
   ${grp === 'a_more' ? `<div class="list" style="margin-top:16px"><button class="row" style="width:100%;text-align:left" data-go="home"><span class="f">Открыть магазин как покупатель</span><span class="muted r">›</span></button><button class="row" style="width:100%;text-align:left" id="logout"><span class="f" style="color:var(--red)">Выйти из панели</span></button></div>` : ''}`;
 }
 function admOrders() {
-  let l = [...DB.orders].reverse(); if (ordF !== 'all') l = l.filter(o => o.status === ordF);
+  let l = [...DB.orders].reverse().filter(ordAB); if (ordF !== 'all') l = l.filter(o => o.status === ordF);
   return `<div class="chips"><button class="chip ${ordF === 'all' ? 'on' : ''}" data-of="all">Все</button>${Object.entries(STATUS).map(([k, v]) => `<button class="chip ${ordF === k ? 'on' : ''}" data-of="${k}">${v}</button>`).join('')}</div>
   ${l.length ? `<div class="list">${l.map(o => `<div class="row" style="flex-wrap:wrap"><div class="f" style="flex:1 1 220px"><b>${esc(o.id)}</b> · ${esc(o.customer.name)} · <a href="tel:${esc(o.customer.phone)}">${esc(o.customer.phone)}</a>
   <div class="small muted">${new Date(o.date).toLocaleString('ru-RU')} · ${o.delivery.service === 'ozon' ? 'Ozon' : 'СДЭК'}: ${esc(o.delivery.city)}, ${esc(o.delivery.address)}</div>
-  <div class="small">${o.items.map(i => `${esc(i.name)} ${esc(i.color)} ${esc(i.size)} ×${i.qty}`).join('; ')}</div>${o.comment ? `<div class="small muted">«${esc(o.comment)}»</div>` : ''}
+  <div class="small">${o.items.map(i => `${itemBrand(i) !== admBrand ? `<span class="muted">${BRANDS[itemBrand(i)]}:</span> ` : ''}${esc(i.name)} ${esc(vt(i.color, i.size))} ×${i.qty}${i.gift ? ' (подарок)' : ''}`).join('; ')}</div>${o.comment ? `<div class="small muted">«${esc(o.comment)}»</div>` : ''}
   ${o.returnCare ? `<div class="small"><span class="st paid">${esc(o.returnCareName || 'Возврат')}</span></div>` : ''}${o.bonusSpent ? `<div class="small muted">Бонусами: −${rub(o.bonusSpent)}</div>` : ''}${o.bonusEarned ? `<div class="small" style="color:var(--green)">Начислено бонусов: ${rub(o.bonusEarned)}</div>` : ''}
   ${o.paidClaimed && o.status === 'awaiting' ? '<div class="small" style="color:var(--accent)">Покупатель нажал «Я оплатил» — проверьте поступление</div>' : ''}</div>
-  <span class="price">${rub(o.total)}</span><select class="inp" data-ost="${esc(o.id)}" style="width:auto;height:38px;font-size:14px">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${o.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>`).join('')}</div>` : '<div class="empty"><b>Заказов пока нет</b>Оформите тестовый заказ как покупатель — он появится здесь</div>'}`;
+  <span class="price">${rub(o.total)}</span><select class="inp" data-ost="${esc(o.id)}" style="width:auto;height:38px;font-size:14px">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${o.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>`).join('')}</div>` : `<div class="empty"><b>Заказов ${admBrand === BW ? 'с товарами BiWabi ' : ''}пока нет</b>Оформите тестовый заказ как покупатель — он появится здесь</div>`}`;
 }
 /* ===== Статистика ===== */
 let statPer = 30, statData = null, statLoading = false;
@@ -859,6 +908,7 @@ function calcStats(ev, from) {
   const rev = ok.reduce((a, o) => a + o.total, 0), items = ok.reduce((a, o) => a + o.items.reduce((b, i) => b + i.qty, 0), 0);
   const gross = ok.reduce((a, o) => a + o.items.reduce((b, i) => b + (i.basePrice || i.price) * i.qty, 0), 0);
   const disc = ok.reduce((a, o) => a + o.items.reduce((b, i) => b + ((i.basePrice || i.price) - i.price) * i.qty, 0) + (o.discount || 0) + (o.bonusSpent || 0), 0);
+  const byBrand = { desire: 0, biwabi: 0 }; ok.forEach(o => o.items.forEach(i => { byBrand[itemBrand(i)] += i.price * i.qty; }));
   const promos = {}; ok.filter(o => o.promo).forEach(o => { (promos[o.promo] ||= { n: 0, sum: 0 }).n++; promos[o.promo].sum += o.discount || 0; });
   const days = {}; for (let t = from; t <= Date.now(); t += 864e5) days[new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })] = 0;
   ok.forEach(o => { const k = new Date(o.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }); if (k in days) days[k] += o.total; });
@@ -866,7 +916,7 @@ function calcStats(ev, from) {
   const statuses = {}; orders.forEach(o => { statuses[o.status] = (statuses[o.status] || 0) + 1; });
   const installs = new Set(ev.filter(e => e.type === 'install' || (e.type === 'visit' && e.meta?.standalone)).map(e => e.sid)).size;
   return { funnel, src, prod, colors, oos, searches, newC, repC, custs, perCust: custs ? allOrders / custs : 0, cities, serv, rev, items, cnt: ok.length, gross, disc, promos, days, weeks, statuses, installs,
-    guar: ok.filter(o => o.returnCare).length, bonus: ok.reduce((a, o) => a + (o.bonusSpent || 0), 0), visits: visits.size, evCount: ev.length };
+    byBrand, guar: ok.filter(o => o.returnCare).length, bonus: ok.reduce((a, o) => a + (o.bonusSpent || 0), 0), visits: visits.size, evCount: ev.length };
 }
 const bars = (rows, fmt = v => v, max) => { const m = max || Math.max(1, ...rows.map(r => r[1])); return `<div class="bars">${rows.map(([l, v, extra]) => `<div class="bar"><span class="bl">${esc(l)}</span><span class="bt"><i style="width:${Math.max(v ? 2 : 0, v / m * 100)}%"></i></span><span class="bv">${fmt(v)}${extra ? ` <em>${extra}</em>` : ''}</span></div>`).join('')}</div>`; };
 const top = (o, n = 8) => Object.entries(o).sort((a, b) => (b[1].n ?? b[1]) - (a[1].n ?? a[1])).slice(0, n);
@@ -876,7 +926,7 @@ function admStats() {
   if (statData.error) return `<div class="note">Статистика ещё не подключена в базе. Запустите обновлённый supabase-setup.sql в Supabase → SQL Editor.<br><span class="small muted">${esc(statData.error)}</span></div>`;
   const S = statData, f = S.funnel;
   let worst = 0, wi = -1; for (let i = 1; i < f.length - 1; i++) { const drop = f[i - 1][1] ? 1 - f[i][1] / f[i - 1][1] : 0; if (f[i - 1][1] >= 5 && drop > worst) { worst = drop; wi = i; } }
-  const prodRows = Object.entries(S.prod).map(([id, v]) => ({ id, name: byId(id)?.name || id, ...v })).sort((a, b) => b.views - a.views);
+  const prodRows = Object.entries(S.prod).filter(([id]) => brandOf(byId(id)) === admBrand).map(([id, v]) => ({ id, name: byId(id)?.name || id, ...v })).sort((a, b) => b.views - a.views);
   const lookers = prodRows.filter(r => r.views >= 15 && r.sold / r.views < .02).slice(0, 5);
   return `<div class="chips">${[7, 30, 90].map(d => `<button class="chip ${statPer === d ? 'on' : ''}" data-per="${d}">${d} дней</button>`).join('')}</div>
   <div class="kpis"><div class="kpi"><span class="muted small">Посетители</span><b>${S.visits}</b></div><div class="kpi"><span class="muted small">Оплаченные заказы</span><b>${S.cnt}</b></div><div class="kpi"><span class="muted small">Конверсия</span><b>${pct(S.cnt, S.visits)}%</b></div><div class="kpi"><span class="muted small">Выручка</span><b>${rub(S.rev)}</b></div><div class="kpi"><span class="muted small">Средний чек</span><b>${rub(S.cnt ? S.rev / S.cnt : 0)}</b></div></div>
@@ -892,6 +942,7 @@ function admStats() {
   <h2>Поиск</h2><div class="stack3"><div class="box"><h3>Частые запросы</h3>${bars(top(S.searches).map(([k, v]) => [k, v.n]))}</div><div class="box"><h3>Ничего не нашлось</h3>${bars(top(Object.fromEntries(Object.entries(S.searches).filter(([, v]) => v.zero))).map(([k, v]) => [k, v.n]))}<p class="small muted">Чего не хватает в ассортименте или в названиях</p></div></div>
   <h2>Покупатели</h2><div class="kpis"><div class="kpi"><span class="muted small">Новые</span><b>${S.newC}</b></div><div class="kpi"><span class="muted small">Повторные</span><b>${S.repC}</b></div><div class="kpi"><span class="muted small">Заказов на покупателя</span><b>${S.perCust.toFixed(1)}</b></div><div class="kpi"><span class="muted small">Вещей в заказе</span><b>${S.cnt ? (S.items / S.cnt).toFixed(1) : 0}</b></div><div class="kpi"><span class="muted small">Установили приложение</span><b>${S.installs}</b></div></div>
   <div class="stack3"><div class="box"><h3>Города</h3>${bars(top(S.cities).map(([k, v]) => [k, v]))}</div><div class="box"><h3>Доставка</h3>${bars(Object.entries(S.serv).map(([k, v]) => [k === 'ozon' ? 'Ozon' : 'СДЭК', v]))}</div>
+  <div class="box"><h3>Выручка по брендам</h3><div class="sum"><span>DESIRE — одежда</span><span>${rub(S.byBrand.desire)}</span></div><div class="sum"><span>BiWabi — для дома</span><span>${rub(S.byBrand.biwabi)}</span></div><p class="small muted" style="margin:8px 0 0">Сумма товаров в оплаченных заказах, без доставки. Таблицы товаров ниже — по выбранному сверху бренду.</p></div>
   <div class="box"><h3>Опции и скидки</h3><div class="sum"><span>Гарантия возврата</span><span>${S.guar} из ${S.cnt} (${pct(S.guar, S.cnt)}%)</span></div><div class="sum"><span>Оплачено бонусами</span><span>${rub(S.bonus)}</span></div><div class="sum"><span>Доля скидок</span><span>${pct(S.disc, S.gross)}%</span></div>
   ${Object.keys(S.promos).length ? top(S.promos).map(([k, v]) => `<div class="sum"><span>Промокод ${esc(k)}</span><span>${v.n} · −${rub(v.sum)}</span></div>`).join('') : '<p class="small muted">Промокоды не применяли</p>'}</div></div>
   <h2>Выручка</h2><div class="box"><h3>По дням</h3>${bars(Object.entries(S.days).slice(-31), v => v ? rub(v) : '—')}</div>
@@ -912,7 +963,7 @@ function admWishes() {
   return `${Object.keys(groups).length ? `<div class="box"><h3>Что дошить или довезти</h3>${bars(Object.entries(groups).sort((a, b) => b[1] - a[1]).map(([k, v]) => { const [pid, c, z] = k.split('|'); return [`${byId(pid)?.name || pid} · ${c} · ${z}`, v]; }), v => v + ' чел.')}</div>` : ''}
   <div class="list" style="margin-top:12px">${l.map(w => { const p = byId(w.pid), inStock = p && stockOf(p, w.color, w.size) > 0, c = String(w.contact || ''), isTg = /^@|[a-z]/i.test(c) && !/^\+?\d[\d\s()-]+$/.test(c);
     const link = isTg ? tgLink(c) : `https://wa.me/${c.replace(/\D/g, '').replace(/^8/, '7')}?text=${encodeURIComponent(`Здравствуйте! ${p?.name || ''} ${w.color} ${w.size} снова в наличии в DESIRE.`)}`;
-    return `<div class="row" style="flex-wrap:wrap"><div class="f" style="flex:1 1 200px"><b>${esc(p?.name || w.pid)}</b> · ${esc(w.color)} · ${esc(w.size)} ${w.status === 'done' ? '<span class="st done">сообщили</span>' : inStock ? '<span class="st shipped">уже в наличии</span>' : ''}<div class="small muted">${new Date(w.ts).toLocaleDateString('ru-RU')} · ${esc(c)}</div></div>
+    return `<div class="row" style="flex-wrap:wrap"><div class="f" style="flex:1 1 200px"><b>${esc(p?.name || w.pid)}</b> · ${esc(vt(w.color, w.size))} ${w.status === 'done' ? '<span class="st done">сообщили</span>' : inStock ? '<span class="st shipped">уже в наличии</span>' : ''}<div class="small muted">${new Date(w.ts).toLocaleDateString('ru-RU')} · ${esc(c)}</div></div>
     ${w.status !== 'done' ? `<a class="btn sm sec" href="${esc(link)}">Написать</a><button class="btn sm" data-wdone="${esc(w.id)}">Сообщили</button>` : ''}</div>`; }).join('')}</div>`;
 }
 async function markWish(id) {
@@ -941,7 +992,8 @@ function admNews() {
   <div class="box"><h3>Новая рассылка</h3><p class="small muted" style="margin-top:0">Получат ${news} подписчиков, которые согласились на новинки и акции.</p>
   <div class="field"><label for="n_t">Заголовок</label><input class="inp" id="n_t" maxlength="60" placeholder="Новая коллекция уже в магазине"></div>
   <div class="field"><label for="n_b">Текст</label><textarea class="inp" id="n_b" rows="3" maxlength="300" placeholder="Тёплые костюмы и пальто — успейте выбрать свой размер"></textarea></div>
-  <div class="field"><label for="n_p">Куда ведёт кнопка</label><select class="inp" id="n_p"><option value="">Главная магазина</option><option value="#catalog">Каталог</option>${DB.products.filter(p => !p.hidden).map(p => `<option value="#p=${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></div>
+  <div class="field"><label for="n_p">Куда ведёт кнопка</label><select class="inp" id="n_p"><option value="">Главная магазина</option><option value="#catalog">Каталог</option><option value="#b=biwabi">Витрина BiWabi — товары для дома</option>${DB.products.filter(p => !p.hidden).map(p => `<option value="#p=${esc(p.id)}">${isBW(p) ? 'BiWabi · ' : ''}${esc(p.name)}</option>`).join('')}</select></div>
+  <button class="btn sec sm" id="nTplBw" style="margin:0 0 10px">Заполнить промо BiWabi</button>
   <button class="btn" id="nSend"${news ? '' : ' disabled'}>Отправить</button></div>
   <h2>Отправлено за 30 дней</h2><div class="box">${Object.keys(by).length ? Object.entries(by).map(([k, v]) => `<div class="sum"><span>${KN[k] || k}</span><span>${v.ok}${v.fail ? ` <em class="muted">· не дошло ${v.fail}</em>` : ''}</span></div>`).join('') : '<p class="small muted">Пока ничего не отправляли</p>'}</div>
   <h2>История рассылок</h2><div class="list">${newsData.b.map(b => `<div class="row" style="flex-wrap:wrap"><div class="f" style="flex:1 1 200px"><b>${esc(b.title)}</b><div class="small muted">${new Date(b.created_at).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${b.status === 'sent' ? `доставлено ${b.sent}${b.failed ? `, не дошло ${b.failed}` : ''}` : 'отправляется…'}</div><div class="small">${esc(b.body)}</div></div></div>`).join('') || '<div class="empty">Рассылок ещё не было</div>'}</div>`;
@@ -966,7 +1018,7 @@ function admReviews() {
   if (!reviewsOn) return '<div class="note">Отзывы ещё не подключены в базе. Запустите обновлённый файл supabase-setup.sql в Supabase → SQL Editor.</div>';
   const l = [...DB.reviews].sort((a, b) => (a.status === 'pending' ? -1 : 0) - (b.status === 'pending' ? -1 : 0));
   return l.length ? `<div class="list">${l.map(r => `<div class="row" style="flex-wrap:wrap;align-items:flex-start"><div class="f" style="flex:1 1 240px"><b>${esc(byId(r.pid)?.name || r.pid)}</b> · ${esc(r.name)} ${stars(r.rating, 12)} <span class="st ${r.status === 'published' ? 'shipped' : r.status === 'hidden' ? 'cancelled' : 'awaiting'}">${r.status === 'published' ? 'опубликован' : r.status === 'hidden' ? 'скрыт' : 'ждёт проверки'}</span>
-    <div class="small muted">${new Date(r.date).toLocaleDateString('ru-RU')}${r.color ? ' · ' + esc(r.color) : ''}${r.size ? ' · ' + esc(r.size) : ''}</div>${r.text ? `<p style="margin:6px 0">${esc(r.text)}</p>` : ''}
+    <div class="small muted">${new Date(r.date).toLocaleDateString('ru-RU')}${vt(r.color, r.size) ? ' · ' + esc(vt(r.color, r.size)) : ''}</div>${r.text ? `<p style="margin:6px 0">${esc(r.text)}</p>` : ''}
     ${(r.photos || []).length ? `<div class="rph">${r.photos.map(src => /^data:image\/jpeg;base64,/.test(src) ? `<img src="${esc(src)}" alt="">` : '').join('')}</div>` : ''}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap">${r.status !== 'published' ? `<button class="btn sm" data-rvs="published" data-rid="${esc(r.id)}">Опубликовать</button>` : ''}${r.status !== 'hidden' ? `<button class="btn sm sec" data-rvs="hidden" data-rid="${esc(r.id)}">Скрыть</button>` : ''}<button class="btn sm red" data-rvd="${esc(r.id)}">Удалить</button></div></div>`).join('')}</div>`
     : '<div class="empty"><b>Отзывов пока нет</b>Покупатели оставляют отзыв в профиле после статуса «Получен»</div>';
@@ -978,15 +1030,15 @@ async function setReview(id, status) {
   if (!SB) save(); render(); toast(status === 'published' ? 'Отзыв опубликован' : status ? 'Отзыв скрыт' : 'Отзыв удалён');
 }
 function admProducts() {
-  const q = admQ.toLowerCase(), l = DB.products.filter(p => !q || (p.name + p.cat).toLowerCase().includes(q));
+  const q = admQ.toLowerCase(), l = DB.products.filter(p => inAB(p) && (!q || (p.name + p.cat).toLowerCase().includes(q)));
   return `<div style="display:flex;gap:8px;margin-bottom:12px"><input class="inp" id="admQ" placeholder="Поиск товара" value="${esc(admQ)}"><button class="btn" id="newP">+ Товар</button></div>
   <div class="list">${l.map(p => `<div class="row"><img class="thumb" style="width:48px;height:64px" src="${esc(coverOf(p))}" alt=""><div class="f"><b>${esc(p.name)}</b>${p.hidden ? ' <span class="st cancelled">скрыт</span>' : ''}<div class="small muted">${esc(p.cat)} · ${rub(priceOf(p))} · остаток ${totalStock(p)} шт.</div></div><button class="btn sm sec" data-edit="${esc(p.id)}">Изменить</button></div>`).join('')}</div>`;
 }
 function admStock() {
-  const q = admQ.toLowerCase(), l = DB.products.filter(p => !q || (p.name + p.cat).toLowerCase().includes(q));
+  const q = admQ.toLowerCase(), l = DB.products.filter(p => inAB(p) && (!q || (p.name + p.cat).toLowerCase().includes(q)));
   return `<input class="inp" id="admQ" placeholder="Поиск товара" value="${esc(admQ)}" style="margin-bottom:12px"><p class="small muted">Изменения сохраняются сразу. Красным — остаток 1 шт. и меньше.</p>
-  ${l.map(p => `<div class="box" style="margin-bottom:10px"><h3>${esc(p.name)} <span class="muted small">${esc(p.cat)}</span></h3><div class="scroll"><table><thead><tr><th>Цвет</th>${p.sizes.map(s => `<th>${esc(s)}</th>`).join('')}</tr></thead><tbody>
-  ${p.colors.map(c => `<tr><td><i class="dot" style="display:inline-block;vertical-align:-2px;background:${colorCss(c)}"></i> ${esc(c)}</td>${p.sizes.map(s => `<td><input class="stk ${stockOf(p, c, s) <= 1 ? 'low' : ''}" type="number" min="0" inputmode="numeric" data-stk="${esc(p.id)}" data-k="${esc(c + '|' + s)}" value="${stockOf(p, c, s)}" aria-label="${esc(p.name + ' ' + c + ' ' + s)}"></td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`).join('')}`;
+  ${l.map(p => `<div class="box" style="margin-bottom:10px"><h3>${esc(p.name)} <span class="muted small">${esc(p.cat)}</span></h3><div class="scroll"><table><thead><tr><th>${isBW(p) ? '' : 'Цвет'}</th>${p.sizes.map(s => `<th>${esc(s)}</th>`).join('')}</tr></thead><tbody>
+  ${p.colors.map(c => `<tr><td>${isBW(p) && c === 'Стандарт' ? 'Остаток, шт.' : `<i class="dot" style="display:inline-block;vertical-align:-2px;background:${colorCss(c)}"></i> ${esc(c)}`}</td>${p.sizes.map(s => `<td><input class="stk ${stockOf(p, c, s) <= 1 ? 'low' : ''}" type="number" min="0" inputmode="numeric" data-stk="${esc(p.id)}" data-k="${esc(c + '|' + s)}" value="${stockOf(p, c, s)}" aria-label="${esc(p.name + ' ' + c + ' ' + s)}"></td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`).join('')}`;
 }
 function admPromo() {
   return `<h2 style="margin-top:0">Промокоды</h2><div class="list">${DB.promos.map(p => `<div class="row"><div class="f"><b>${esc(p.code)}</b> ${p.active ? '' : '<span class="st cancelled">выкл</span>'}<div class="small muted">${p.type === 'percent' ? p.value + '%' : rub(p.value)} · от ${rub(p.minSum || 0)}${p.note ? ' · ' + esc(p.note) : ''}</div></div><button class="btn sm sec" data-ptog="${p.id}">${p.active ? 'Выключить' : 'Включить'}</button><button class="btn sm red" data-pdel="${p.id}">Удалить</button></div>`).join('') || '<div class="row muted">Нет промокодов</div>'}</div>
@@ -995,8 +1047,8 @@ function admPromo() {
   <h2>Акции на витрине</h2><p class="small muted" style="margin-top:-6px">Скидка применяется к категории или выбранным товарам и показывается баннером на главной.</p>
   <div class="list">${DB.campaigns.map(c => `<div class="row"><div class="f"><b>${esc(c.title)}</b> ${c.active ? '<span class="st shipped">идёт</span>' : '<span class="st cancelled">выкл</span>'}<div class="small muted">−${c.percent}% · ${esc(c.cat || (c.productIds || []).map(id => byId(id)?.name).filter(Boolean).join(', ') || '—')}</div></div><button class="btn sm sec" data-ctog="${c.id}">${c.active ? 'Остановить' : 'Запустить'}</button><button class="btn sm red" data-cdel="${c.id}">Удалить</button></div>`).join('') || '<div class="row muted">Нет акций</div>'}</div>
   <div class="box" style="margin-top:10px"><h3>Новая акция</h3><div class="field"><label for="ct">Название</label><input class="inp" id="ct" placeholder="Чёрная пятница"></div><div class="field"><label for="cx">Текст баннера</label><input class="inp" id="cx" placeholder="−20% на все костюмы до воскресенья"></div>
-  <div class="two"><div class="field"><label for="cp">Скидка, %</label><input class="inp" id="cp" type="number" min="1" max="90"></div><div class="field"><label for="cc">Категория</label><select class="inp" id="cc"><option value="">— выбрать товары ниже —</option>${DB.categories.map(c => `<option>${esc(c)}</option>`).join('')}</select></div></div>
-  <div class="field"><label>Или отдельные товары</label><div class="chips" style="flex-wrap:wrap">${DB.products.map(p => `<label class="chip" style="display:flex;align-items:center;gap:6px"><input type="checkbox" value="${esc(p.id)}" class="cpi">${esc(p.name)}</label>`).join('')}</div></div>
+  <div class="two"><div class="field"><label for="cp">Скидка, %</label><input class="inp" id="cp" type="number" min="1" max="90"></div><div class="field"><label for="cc">Категория</label><select class="inp" id="cc"><option value="">— выбрать товары ниже —</option>${catsOf(admBrand).map(c => `<option>${esc(c)}</option>`).join('')}</select></div></div>
+  <div class="field"><label>Или отдельные товары</label><div class="chips" style="flex-wrap:wrap">${DB.products.filter(inAB).map(p => `<label class="chip" style="display:flex;align-items:center;gap:6px"><input type="checkbox" value="${esc(p.id)}" class="cpi">${esc(p.name)}</label>`).join('')}</div></div>
   <button class="btn" id="addCamp">Запустить акцию</button></div>`;
 }
 function admSetup() {
@@ -1007,10 +1059,18 @@ function admSetup() {
   <div class="field"><label for="s1">Получатель</label><input class="inp" id="s1" data-set="pay.name" value="${esc(p.name)}"></div><div class="two"><div class="field"><label for="s2">Расчётный счёт</label><input class="inp" id="s2" data-set="pay.account" inputmode="numeric" value="${esc(p.account)}"></div><div class="field"><label for="s3">Банк</label><input class="inp" id="s3" data-set="pay.bank" value="${esc(p.bank)}"></div>
   <div class="field"><label for="s4">БИК</label><input class="inp" id="s4" data-set="pay.bic" inputmode="numeric" value="${esc(p.bic)}"></div><div class="field"><label for="s5">Корр. счёт</label><input class="inp" id="s5" data-set="pay.corr" inputmode="numeric" value="${esc(p.corr)}"></div><div class="field"><label for="s6">ИНН</label><input class="inp" id="s6" data-set="pay.inn" inputmode="numeric" value="${esc(p.inn)}"></div></div>`}</div>
   <div class="box" style="margin-top:12px"><h3>Доставка</h3><div class="two"><div class="field"><label for="d0">Город склада (откуда считаем)</label><select class="inp" id="d0" data-set="origin">${CITIES.map(c => `<option ${c.n === s.origin ? 'selected' : ''}>${esc(c.n)}</option>`).join('')}</select></div>
-  <div class="field"><label for="d1">Бесплатно от, шт. (0 — выкл.)</label><input class="inp" id="d1" type="number" min="0" data-set="freeFromItems" value="${s.freeFromItems}"></div></div>
+  <div class="field"><label for="d1">Бесплатно от, шт. одежды (0 — выкл.)</label><input class="inp" id="d1" type="number" min="0" data-set="freeFromItems" value="${s.freeFromItems}"></div></div>
   ${['ozon', 'cdek'].map(k => `<p style="margin:6px 0"><b>${k === 'ozon' ? 'Ozon' : 'СДЭК'}</b></p><div class="two" style="grid-template-columns:repeat(3,minmax(0,1fr))"><div class="field"><label>База, ₽</label><input class="inp" type="number" data-set="${k}.base" value="${s[k].base}"></div><div class="field"><label>За км, ₽</label><input class="inp" type="number" step="0.005" data-set="${k}.perKm" value="${s[k].perKm}"></div><div class="field"><label>Доп. вещь, ₽</label><input class="inp" type="number" data-set="${k}.perItem" value="${s[k].perItem}"></div></div>`).join('')}
   <div class="field"><label for="d2">Доплата за удалённые регионы, ₽</label><input class="inp" id="d2" type="number" data-set="remoteExtra" value="${s.remoteExtra}"></div>
   <p class="small muted">Пример: ${esc(s.origin)} → ${s.origin === 'Москва' ? 'Иркутск' : 'Москва'}, Ozon, 1 вещь: ${rub(delivery('ozon', s.origin === 'Москва' ? 'Иркутск' : 'Москва', [{ pid: 'yosh', qty: 1 }])?.full || 0)}.</p></div>
+  <div class="box" style="margin-top:12px"><h3>BiWabi в корзине</h3>
+  <div class="switch"><span>Блок «Добавьте к заказу» с товарами BiWabi</span><input type="checkbox" data-set="bw.upsellOn" ${s.bw.upsellOn ? 'checked' : ''}></div>
+  <div class="field"><label>Заголовок блока</label><input class="inp" data-set="bw.upsellTitle" value="${esc(s.bw.upsellTitle)}"></div>
+  <div class="switch"><span>Подарок за сумму заказа</span><input type="checkbox" data-set="bw.giftOn" ${s.bw.giftOn ? 'checked' : ''}></div>
+  <div class="two"><div class="field"><label>От суммы товаров, ₽</label><input class="inp" type="number" min="0" step="100" data-set="bw.giftFrom" value="${esc(s.bw.giftFrom)}"></div>
+  <div class="field"><label>Что дарим</label><select class="inp" data-set="bw.giftPid">${DB.products.filter(p => isBW(p)).map(p => `<option value="${esc(p.id)}" ${p.id === s.bw.giftPid ? 'selected' : ''}>${esc(p.name)} · остаток ${totalStock(p)}</option>`).join('')}</select></div></div>
+  <div class="field"><label>Текст в корзине</label><input class="inp" data-set="bw.giftText" value="${esc(s.bw.giftText)}" placeholder="Салфетка BiWabi в подарок"></div>
+  <p class="small muted">Подарок добавляется в заказ за 0 ₽ и списывается с остатка. Если подарка нет в наличии — предложение не показывается.</p></div>
   <div class="box" style="margin-top:12px"><h3>Возврат</h3><div class="seg" style="margin:8px 0 6px"><button class="${s.returns.mode !== 'law' ? 'on' : ''}" data-rmode="paid">Без возврата + гарантия</button><button class="${s.returns.mode === 'law' ? 'on' : ''}" data-rmode="law">14 дней на всё</button></div>
   <p class="small muted">${s.returns.mode !== 'law' ? 'Возврат не предусмотрен; покупатель может добавить «Гарантию возврата» на весь заказ. Перед запуском проверьте этот вариант у юриста.' : 'Возврат 14 дней на все товары, платная опция — расширенный возврат с доставкой за ваш счёт.'}</p>
   <div class="switch"><span>Предлагать платную опцию при оформлении</span><input type="checkbox" data-set="returns.extOn" ${s.returns.extOn ? 'checked' : ''}></div>
@@ -1052,12 +1112,14 @@ function bindAdmin() {
     if (t.dataset.adm) { adm = t.dataset.adm; admQ = ''; render(); }
     if (t.id === 'logout') { if (SB) SB.auth.signOut(); staff = false; go('profile'); }
     if (t.id === 'reload') { t.disabled = true; loadRemote(true).then(() => { render(); toast('Обновлено'); }).catch(() => { t.disabled = false; toast('Не удалось обновить'); }); }
-    if (t.id === 'seed') confirmBox('Загрузить 40 моделей из каталога в базу? Товары с такими же названиями будут перезаписаны.', async () => { DB.products = clone(SEED.products); if (!DB.promos.length) DB.promos = clone(SEED.promos); if (!DB.campaigns.length) DB.campaigns = clone(SEED.campaigns); clearTimeout(syncT); if (await sbSync()) { toast('Каталог загружен в базу'); render(); } });
+    if (t.id === 'seed') confirmBox(`Загрузить ${SEED.products.length} товаров из каталога в базу? Товары с такими же названиями будут перезаписаны.`, async () => { DB.products = clone(SEED.products); if (!DB.promos.length) DB.promos = clone(SEED.promos); if (!DB.campaigns.length) DB.campaigns = clone(SEED.campaigns); clearTimeout(syncT); if (await sbSync()) { toast('Каталог загружен в базу'); render(); } });
     if (t.dataset.of) { ordF = t.dataset.of; render(); }
     if (t.dataset.per) { statPer = +t.dataset.per; statData = null; render(); }
     if (t.dataset.wdone) markWish(t.dataset.wdone);
     if (t.id === 'staffTg') staffTg();
     if (t.id === 'nSend') sendNews();
+    if (t.id === 'nTplBw') { $('#n_t').value = 'BiWabi — уют и чистота дома'; $('#n_b').value = 'Мягкие салфетки и тряпочки для уборки от DESIRE. Добавьте к заказу одежды — приедут одной посылкой.'; $('#n_p').value = '#b=biwabi'; }
+    if (t.dataset.abrand) { admBrand = t.dataset.abrand; admQ = ''; render(); }
     if (t.id === 'mkLink') { const u = buildUtm(); $('#utmOut').textContent = u; (navigator.clipboard ? navigator.clipboard.writeText(u) : Promise.reject()).then(() => toast('Ссылка скопирована'), () => toast('Скопируйте ссылку ниже')); }
     if (t.dataset.rvs) setReview(t.dataset.rid, t.dataset.rvs);
     if (t.dataset.rvd) confirmBox('Удалить отзыв?', () => setReview(t.dataset.rvd, ''));
@@ -1100,37 +1162,39 @@ function resizeImg(file, max = 700, q = .78) {
 }
 /* Редактор фото по цветам: порядок меняется только внутри своего цвета */
 function photoGroupsHtml(p) {
-  const groups = [...p.colors, ''].map(c => [c, p.photos.map((f, i) => [f, i]).filter(([f]) => (p.colors.includes(f.color) ? f.color : '') === c)]).filter(([c, l]) => l.length || c);
+  const cols = isBW(p) ? [] : p.colors;   // у товаров BiWabi нет цветов — все фото общие
+  const groups = [...cols, ''].map(c => [c, p.photos.map((f, i) => [f, i]).filter(([f]) => (cols.includes(f.color) ? f.color : '') === c)]).filter(([c, l]) => l.length || c);
   return groups.map(([c, l]) => `<div class="phg"><div class="phg-h"><b>${c ? esc(c) : 'Общие фото'}</b><span class="muted small">${l.length} фото</span>${l.length && l[0][1] !== 0 ? `<button class="btn sm sec" data-phcover="${l[0][1]}">Сделать обложкой</button>` : l.length ? '<span class="tag">обложка каталога</span>' : ''}</div>
-    ${l.length ? `<div class="phs">${l.map(([f, i], k) => `<div><img src="${esc(f.src)}" alt=""><button class="x" data-xph="${i}" aria-label="Удалить фото">×</button><span class="mv"><button data-phm="${i}" data-to="${k ? l[k - 1][1] : ''}" ${k ? '' : 'disabled'} aria-label="Левее">‹</button>${k ? `<button data-phm="${i}" data-to="${l[0][1]}" aria-label="Сделать главным для цвета">★</button>` : '<em>главное</em>'}<button data-phm="${i}" data-to="${k < l.length - 1 ? l[k + 1][1] : ''}" data-after="1" ${k < l.length - 1 ? '' : 'disabled'} aria-label="Правее">›</button></span><select data-phc="${i}"><option value="">Общее</option>${p.colors.map(cc => `<option ${cc === f.color ? 'selected' : ''}>${esc(cc)}</option>`).join('')}</select></div>`).join('')}</div>` : '<p class="small muted" style="margin:4px 0 0">Нет фото этого цвета</p>'}</div>`).join('');
+    ${l.length ? `<div class="phs">${l.map(([f, i], k) => `<div><img src="${esc(f.src)}" alt=""><button class="x" data-xph="${i}" aria-label="Удалить фото">×</button><span class="mv"><button data-phm="${i}" data-to="${k ? l[k - 1][1] : ''}" ${k ? '' : 'disabled'} aria-label="Левее">‹</button>${k ? `<button data-phm="${i}" data-to="${l[0][1]}" aria-label="Сделать главным для цвета">★</button>` : '<em>главное</em>'}<button data-phm="${i}" data-to="${k < l.length - 1 ? l[k + 1][1] : ''}" data-after="1" ${k < l.length - 1 ? '' : 'disabled'} aria-label="Правее">›</button></span>${cols.length ? `<select data-phc="${i}"><option value="">Общее</option>${p.colors.map(cc => `<option ${cc === f.color ? 'selected' : ''}>${esc(cc)}</option>`).join('')}</select>` : ''}</div>`).join('')}</div>` : '<p class="small muted" style="margin:4px 0 0">Нет фото этого цвета</p>'}</div>`).join('');
 }
 function editProduct(id) {
-  const src = id ? byId(id) : { id: '', name: '', cat: DB.categories[0], price: 0, oldPrice: 0, desc: '', comp: '', specs: '', params: [], sizes: ['42–48'], colors: ['Чёрный'], photos: [], stock: {}, hidden: false, freeShip: false, isNew: true, tag: '' };
-  const p = clone(src);
+  const nb = admBrand === BW;
+  const src = id ? byId(id) : { id: '', name: '', ...(nb ? { brand: BW } : {}), cat: catsOf(admBrand)[0], price: 0, oldPrice: 0, desc: '', comp: '', specs: '', params: [], sizes: nb ? ['Набор'] : ['42–48'], colors: nb ? ['Стандарт'] : ['Чёрный'], photos: [], stock: {}, hidden: false, freeShip: false, isNew: true, tag: '' };
+  const p = clone(src), bw = isBW(p);
   sheet(id ? 'Редактировать товар' : 'Новый товар', '', api => {
     const draw = () => api.set(`<div class="sh-b">
     <div class="field"><label for="e_n">Название</label><input class="inp" id="e_n" value="${esc(p.name)}"></div>
-    <div class="two"><div class="field"><label for="e_c">Категория</label><select class="inp" id="e_c">${DB.categories.map(c => `<option ${c === p.cat ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div><div class="field"><label for="e_t">Метка (необязательно)</label><input class="inp" id="e_t" value="${esc(p.tag || '')}" placeholder="Новый материал"></div>
+    <div class="two"><div class="field"><label for="e_c">Категория</label><select class="inp" id="e_c">${[...new Set([...catsOf(brandOf(p)), p.cat])].map(c => `<option ${c === p.cat ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div><div class="field"><label for="e_t">Метка (необязательно)</label><input class="inp" id="e_t" value="${esc(p.tag || '')}" placeholder="Новый материал"></div>
     <div class="field"><label for="e_p">Цена, ₽</label><input class="inp" id="e_p" type="number" min="0" value="${p.price}"></div><div class="field"><label for="e_o">Старая цена, ₽ (для скидки)</label><input class="inp" id="e_o" type="number" min="0" value="${p.oldPrice || ''}"></div></div>
     <div class="field"><label for="e_d">Описание</label><textarea class="inp" id="e_d">${esc(p.desc)}</textarea></div>
     <div class="field"><label for="e_m">Состав</label><input class="inp" id="e_m" value="${esc(p.comp)}"></div>
-    <h3 style="margin-top:12px">Параметры</h3><p class="small muted" style="margin-top:0">Покупатель видит их по кнопке «Смотреть параметры». Например: Длина — 65 см, Ширина — 60×2 см.</p>
+    ${bw ? '' : `<h3 style="margin-top:12px">Параметры</h3><p class="small muted" style="margin-top:0">Покупатель видит их по кнопке «Смотреть параметры». Например: Длина — 65 см, Ширина — 60×2 см.</p>
     <div class="prm">${(p.params || []).map((r, i) => `<div class="prow"><input class="inp" data-pn="${i}" placeholder="Название" value="${esc(r.n)}"><input class="inp" data-pv="${i}" placeholder="Значение" value="${esc(r.v)}"><button class="x" data-pdel="${i}" aria-label="Удалить параметр">×</button></div>`).join('')}</div>
     <button class="btn sec sm" id="e_padd" style="margin:6px 0 4px">+ Добавить параметр</button>
-    <label class="row" style="gap:10px;margin:4px 0 8px"><input type="checkbox" id="e_pnote" ${paramsNoteOn(p) ? 'checked' : ''}><span class="f small">Показывать пояснение «Замеры сняты с изделия в разложенном виде, ×2 — ширина…»</span></label>
+    <label class="row" style="gap:10px;margin:4px 0 8px"><input type="checkbox" id="e_pnote" ${paramsNoteOn(p) ? 'checked' : ''}><span class="f small">Показывать пояснение «Замеры сняты с изделия в разложенном виде, ×2 — ширина…»</span></label>`}
     <div class="field"><label for="e_care">Уход (если очистить поле — подставится подсказка по составу)</label><textarea class="inp" id="e_care" rows="3">${esc(careOf(p))}</textarea></div>
-    <div class="field"><label for="e_col">Цвета через запятую</label><input class="inp" id="e_col" value="${esc(p.colors.join(', '))}"></div>
-    <div class="field"><label for="e_sz">Размеры через запятую</label><input class="inp" id="e_sz" value="${esc(p.sizes.join(', '))}"></div>
+    ${bw ? '' : `<div class="field"><label for="e_col">Цвета через запятую</label><input class="inp" id="e_col" value="${esc(p.colors.join(', '))}"></div>`}
+    <div class="field"><label for="e_sz">${bw ? 'Форматы через запятую (например: 2 шт · 50×40 см)' : 'Размеры через запятую'}</label><input class="inp" id="e_sz" value="${esc(p.sizes.join(', '))}"></div>
     <div class="switch"><span>Показывать в магазине</span><input type="checkbox" id="e_h" ${p.hidden ? '' : 'checked'}></div>
     <div class="switch"><span>Бесплатная доставка</span><input type="checkbox" id="e_f" ${p.freeShip ? 'checked' : ''}></div>
     <div class="switch"><span>Метка «Новинка»</span><input type="checkbox" id="e_new" ${p.isNew ? 'checked' : ''}></div>
-    <h3 style="margin-top:12px">Фото</h3><p class="small muted" style="margin-top:0">Фото разложены по цветам. У каждого цвета своё главное фото: ★ — сделать главным. Его видят первым, когда выбирают этот цвет.</p>${photoGroupsHtml(p)}
+    <h3 style="margin-top:12px">Фото</h3><p class="small muted" style="margin-top:0">${bw ? 'Первое фото — обложка в каталоге. Стрелками меняйте порядок, ★ — сделать главным.' : 'Фото разложены по цветам. У каждого цвета своё главное фото: ★ — сделать главным. Его видят первым, когда выбирают этот цвет.'}</p>${photoGroupsHtml(p)}
     <label class="btn sec sm" style="margin-top:10px">Добавить фото<input type="file" accept="image/*" multiple id="e_up" hidden></label>
-    <h3 style="margin-top:18px">Остатки</h3><div class="scroll"><table><thead><tr><th>Цвет</th>${p.sizes.map(s => `<th>${esc(s)}</th>`).join('')}</tr></thead><tbody>${p.colors.map(c => `<tr><td>${esc(c)}</td>${p.sizes.map(s => `<td><input class="stk" type="number" min="0" data-ek="${esc(c + '|' + s)}" value="${p.stock[c + '|' + s] ?? 0}"></td>`).join('')}</tr>`).join('')}</tbody></table></div>
+    <h3 style="margin-top:18px">Остатки</h3><div class="scroll"><table><thead><tr><th>${bw ? '' : 'Цвет'}</th>${p.sizes.map(s => `<th>${esc(s)}</th>`).join('')}</tr></thead><tbody>${p.colors.map(c => `<tr><td>${bw && c === 'Стандарт' ? 'Шт.' : esc(c)}</td>${p.sizes.map(s => `<td><input class="stk" type="number" min="0" data-ek="${esc(c + '|' + s)}" value="${p.stock[c + '|' + s] ?? 0}"></td>`).join('')}</tr>`).join('')}</tbody></table></div>
     <button class="btn w" id="e_save" style="margin-top:16px">Сохранить</button>${id ? '<button class="btn w red" id="e_del" style="margin-top:6px">Удалить товар</button>' : ''}</div>`);
     const read = () => {
       p.name = $('#e_n').value.trim(); p.cat = $('#e_c').value; p.tag = $('#e_t').value.trim(); p.price = +$('#e_p').value || 0; p.oldPrice = +$('#e_o').value || 0;
-      p.desc = $('#e_d').value; { const c = $('#e_care').value.trim(); p.care = c === defaultCare(p) ? '' : c; } p.comp = $('#e_m').value; p.paramsNote = $('#e_pnote').checked;
+      p.desc = $('#e_d').value; { const c = $('#e_care').value.trim(); p.care = c === defaultCare(p) ? '' : c; } p.comp = $('#e_m').value; if ($('#e_pnote')) p.paramsNote = $('#e_pnote').checked;
       p.params = [...api.el.querySelectorAll('[data-pn]')].map(x => ({ n: x.value.trim(), v: (api.el.querySelector(`[data-pv="${x.dataset.pn}"]`).value || '').trim() })); p.hidden = !$('#e_h').checked; p.freeShip = $('#e_f').checked; p.isNew = $('#e_new').checked;
       api.el.querySelectorAll('[data-ek]').forEach(x => p.stock[x.dataset.ek] = Math.max(0, parseInt(x.value) || 0));
     };
@@ -1179,6 +1243,9 @@ document.addEventListener('click', e => {
   if (t.dataset.notihide) { ls.set('desire_notif_hide', 1); return render(); }
   if (t.dataset.consent) { if (t.dataset.consent === 'reset') { try { localStorage.removeItem(CONSENT); } catch {} toast('Выберите настройки cookie внизу экрана'); document.querySelectorAll('.sheetbg [data-close]').forEach(b => b.click()); return consentBanner(); } ls.set(CONSENT, t.dataset.consent); document.getElementById('cookie')?.remove(); if (t.dataset.consent === 'all') loadMetrika(); return; }
   if (t.id === 'chatBtn') return openContact('');
+  if (t.dataset.brand) { setBrand(t.dataset.brand); if (route !== 'catalog') go('home'); else { render(); window.scrollTo({ top: 0 }); } return; }
+  if (t.dataset.ups) { const p = byId(t.dataset.ups); if (!p) return; let v = null; for (const c of p.colors) for (const z of p.sizes) if (!v && stockOf(p, c, z) > 0) v = [c, z];
+    if (v && addToCart(p.id, v[0], v[1], 1)) { toast(`${p.name} — в корзине`); track('cart_add', { pid: p.id, color: v[0], size: v[1], val: priceOf(p), meta: { upsell: 1 } }); render(); } return; }
   if (t.dataset.go) return go(t.dataset.go);
   if (t.dataset.fav && !t.closest('.sheet')) return toggleFav(t.dataset.fav);
   if (t.dataset.open && !t.closest('.sheet')) return openProduct(t.dataset.open);
@@ -1286,11 +1353,12 @@ async function installAction(a) {
 if ('serviceWorker' in navigator && location.protocol === 'https:' && window.top === window.self) { try { navigator.serviceWorker.register('/sw.js').catch(() => {}); } catch {} }
 const h0 = location.hash.slice(1); if (TABS.some(x => x[0] === h0)) route = h0;
 async function deepLink(h) {
+  const bm = /^b=(desire|biwabi)$/.exec(h || ''); if (bm) { setBrand(bm[1]); history.replaceState(null, '', '#home'); route = 'home'; render(); return true; }
   const m = /^(p|order)=(.+)$/.exec(h || ''); if (!m) return false;
   const id = decodeURIComponent(m[2]);
   document.querySelectorAll('.sheetbg').forEach(x => x.remove()); document.body.style.overflow = '';
   for (let i = 0; i < 40 && loading; i++) await new Promise(r => setTimeout(r, 250));
-  if (m[1] === 'p') { const p = byId(id); history.replaceState(null, '', '#catalog'); route = 'catalog'; render(); if (p) openProduct(p.id); }
+  if (m[1] === 'p') { const p = byId(id); if (p) setBrand(brandOf(p)); history.replaceState(null, '', '#catalog'); route = 'catalog'; render(); if (p) openProduct(p.id); }
   else { history.replaceState(null, '', '#profile'); route = 'profile'; if (SB && myTokens.length) await loadMine(); render(); openOrder(id); }
   return true;
 }

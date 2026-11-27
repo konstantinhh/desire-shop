@@ -169,6 +169,21 @@ td.n{text-align:right;white-space:nowrap}
 .box{background:var(--card);border-radius:var(--r);padding:16px}
 @media(max-width:600px){.hero{grid-template-columns:1fr;min-height:0}.hero .ph{order:-1}.hero .ph img{aspect-ratio:4/5}.two{grid-template-columns:1fr}table{font-size:13px}}
 /* О нас, отзывы, бонусы, опции */
+.lg{display:inline-block;background:currentColor;-webkit-mask:var(--m) center/contain no-repeat;mask:var(--m) center/contain no-repeat;vertical-align:middle;height:1em}
+.lg-desire{--m:url(img/logo-desire.png);aspect-ratio:612/122}.lg-biwabi{--m:url(img/logo-biwabi.png);aspect-ratio:536/125}
+.brand{display:flex;align-items:center}.brand .lg{height:19px}
+.bsw{display:flex;align-items:center;justify-content:center;gap:16px;margin:0 0 14px;color:var(--ink)}
+.bsw button{padding:10px 8px;opacity:.3;transition:opacity .2s;display:flex;border-radius:12px}.bsw button.on{opacity:1}.bsw button:not(.on):hover{opacity:.55}
+.bsw .lg{height:22px}.bsep{width:1px;height:26px;background:var(--line)}
+.hero.bwh{background:light-dark(#e9efe9,#1b211d)}.hlogo{display:block;color:var(--ink)}.hlogo .lg{height:clamp(38px,6vw,60px)}
+.uph{display:flex;align-items:baseline;justify-content:space-between;gap:10px}.uph .lg{height:13px;color:var(--muted);flex:none}
+.ups{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(150px,44%);gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:6px;scrollbar-width:none}.ups::-webkit-scrollbar{display:none}
+.up{scroll-snap-align:start;background:var(--card);border-radius:var(--r);padding:8px 8px 10px;display:flex;flex-direction:column;gap:3px}
+.up img{width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:12px;margin-bottom:4px}.up b{font-size:14px;line-height:1.25;font-weight:600}
+.upb{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:auto;padding-top:4px}
+.plus{width:34px;height:34px;flex:none;border-radius:50%;background:var(--btn);color:var(--btnInk);font-size:22px;line-height:1;display:grid;place-items:center}
+.gift{display:flex;align-items:center;gap:12px;background:var(--card);border-radius:var(--r);padding:12px;margin-top:12px;border:1.5px dashed color-mix(in srgb,var(--green) 55%,transparent)}.gift .price{color:var(--green)}
+.gnote{margin-top:12px}
 .about{margin-top:28px;border-radius:28px;background:var(--beige);padding:clamp(22px,4vw,40px);display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:24px;align-items:center}
 .about p{margin:0 0 8px;font-size:17px;max-width:52ch}
 .ab-st{display:grid;gap:10px}.ab-st div{background:var(--card);border-radius:18px;padding:14px 16px}.ab-st b{display:block;font:600 26px/1.1 Lora,Georgia,serif}.ab-st span{font-size:14px;color:var(--muted)}

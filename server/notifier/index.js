@@ -27,6 +27,7 @@ webpush.setVapidDetails(env.VAPID_SUBJECT || 'mailto:' + (env.CONTACT_EMAIL || '
 /* ---------- Помощники ---------- */
 const rub = n => (Math.round(n) || 0).toLocaleString('ru-RU') + ' ₽';
 const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
+const vt = (c, z) => [c, z].filter(x => x && x !== 'Стандарт').join(', ');   // «Стандарт» — единственный вариант товаров BiWabi
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function settings() { const r = await q('select data from settings where id = 1'); return r.rows[0]?.data || {}; }
 function notifyCfg(s) { return { cartOn: true, cart1Hours: 3, cart2Days: 2, quietFrom: 22, quietTo: 9, stockOn: true, statusOn: true, ...(s.notify || {}) }; }
@@ -88,7 +89,7 @@ const STATUS_MSG = {
 async function onOrderNew(id) {
   const o = await getOrder(id); if (!o) return;
   const d = o.data || {}, c = d.customer || {}, dl = d.delivery || {};
-  const items = (d.items || []).map(i => `• ${esc(i.name)} — ${esc(i.color)}, ${esc(i.size)} × ${i.qty}`).join('\n');
+  const items = (d.items || []).map(i => `• ${esc(i.name)} — ${esc(vt(i.color, i.size))} × ${i.qty}${i.gift ? ' (подарок)' : ''}`).join('\n');
   await staffSay(`🛍 <b>Новый заказ ${esc(id)}</b> · ${rub(d.total)}\n${esc(c.name)}, ${esc(dl.city)} (${dl.service === 'ozon' ? 'Ozon' : 'СДЭК'})\n${items}\n\nЖдёт оплату по QR.`, SITE + '/#admin');
 }
 async function onOrderPaid(id) {
@@ -113,7 +114,7 @@ async function onProduct(id) {
     if (!((stock[wish.color + '|' + wish.size] || 0) > 0)) continue;
     const subs = (await q('select * from subscribers where dev = $1', [wish.dev])).rows;
     if (!subs.length) continue;
-    const r = await sendMany(subs, { title: 'Снова в наличии', body: `${productName(p)} — ${wish.color}, ${wish.size}. Успейте заказать!`, url: `${SITE}/#p=${encodeURIComponent(id)}`, button: 'Посмотреть', tag: 'stock-' + id }, 'stock');
+    const r = await sendMany(subs, { title: 'Снова в наличии', body: `${productName(p)} — ${vt(wish.color, wish.size)}. Успейте заказать!`, url: `${SITE}/#p=${encodeURIComponent(id)}`, button: 'Посмотреть', tag: 'stock-' + id }, 'stock');
     if (r.ok) await q(`update wishes set status = 'auto' where id = $1`, [wish.id]);
   }
 }
@@ -146,7 +147,7 @@ async function cartTick() {
     const avail = c.items.filter(i => prods[i.pid] && !prods[i.pid].data?.hidden && ((prods[i.pid].data?.stock || {})[i.color + '|' + i.size] || 0) > 0);
     await q(`update carts set ${first ? 'r1' : 'r2'} = now() where dev = $1`, [c.dev]);
     if (!avail.length) continue;                                          // всё раскупили — не дразним
-    const names = avail.slice(0, 3).map(i => `${productName(prods[i.pid])} (${i.color}, ${i.size})`).join(', ') + (avail.length > 3 ? ` и ещё ${avail.length - 3}` : '');
+    const names = avail.slice(0, 3).map(i => `${productName(prods[i.pid])} (${vt(i.color, i.size)})`).join(', ') + (avail.length > 3 ? ` и ещё ${avail.length - 3}` : '');
     const msg = first
       ? { title: 'Вы оставили вещи в корзине', body: `${names}. Размеры заканчиваются — оформите, пока есть в наличии.` }
       : { title: 'Ещё думаете?', body: `${names} всё ещё ждут вас в корзине. Если есть вопрос по размеру — напишите нам, подскажем.` };
