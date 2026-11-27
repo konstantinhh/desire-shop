@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '2.0.1';
+const APP_VERSION = '2.1';
 /* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -138,7 +138,12 @@ const IC = {
   heart: '<path d="M12 20s-7.5-4.6-9.3-9.2C1.5 7.6 3.6 4.5 6.8 4.5c2.1 0 3.6 1.2 5.2 3 1.6-1.8 3.1-3 5.2-3 3.2 0 5.3 3.1 4.1 6.3C19.5 15.4 12 20 12 20z"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
   chat: '<path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4V6a1 1 0 0 1 1-1z"/><path d="M8 10h8M8 13h5"/>',
-  star: '<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z"/>'
+  star: '<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z"/>',
+  a_orders: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
+  a_goods: '<path d="M12 4a2 2 0 0 1 2 2c0 1-1 1.6-2 2.3L3.5 14a1.5 1.5 0 0 0 .9 2.7h15.2a1.5 1.5 0 0 0 .9-2.7L12 8.3"/>',
+  a_stats: '<path d="M4 20V10M10 20V4M16 20v-7M21 20H3"/>',
+  a_clients: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.2a6.5 6.5 0 0 1 3.5 5.8"/>',
+  a_more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>'
 };
 const svg = (n, cls = '') => `<svg viewBox="0 0 24 24" class="${cls}">${IC[n]}</svg>`;
 
@@ -190,7 +195,20 @@ function addToCart(pid, color, size, qty = 1) {
 /* ===== Навигация ===== */
 const TABS = [['home', 'Главная'], ['catalog', 'Каталог'], ['favorites', 'Избранное'], ['cart', 'Корзина'], ['profile', 'Профиль']];
 let route = 'home', catFilter = '', query = '', sortBy = 'pop';
+/* Нижнее меню сотрудника: разделы панели сгруппированы по 5 кнопкам */
+const ADM_GROUPS = { a_orders: ['orders'], a_goods: ['products', 'stock'], a_stats: ['stats'], a_clients: ['wishes', 'news', 'reviews'], a_more: ['promo', 'setup'] };
+const ADM_NAMES = { a_orders: 'Заказы', a_goods: 'Товары', a_stats: 'Статистика', a_clients: 'Клиенты', a_more: 'Ещё' };
+const ADM_SUB = { products: 'Товары', stock: 'Остатки', wishes: 'Ждут', news: 'Рассылки', reviews: 'Отзывы', promo: 'Акции', setup: 'Настройки' };
+const admGroupOf = a => Object.keys(ADM_GROUPS).find(g => ADM_GROUPS[g].includes(a)) || 'a_orders';
+const admLast = {};
 function renderTabs() {
+  if (route === 'admin' && staff) {
+    const cur = admGroupOf(adm), awaiting = DB.orders.filter(o => o.status === 'awaiting').length;
+    const cl = DB.wishes.filter(w => w.status === 'new').length + DB.reviews.filter(r => r.status === 'pending').length;
+    const badge = { a_orders: awaiting, a_clients: cl };
+    $('#tabs').innerHTML = Object.keys(ADM_GROUPS).map(g => `<button class="tab ${cur === g ? 'on' : ''}" data-admgo="${g}" aria-label="${ADM_NAMES[g]}">${svg(g)}${ADM_NAMES[g]}${badge[g] ? `<span class="cnt">${badge[g]}</span>` : ''}</button>`).join('');
+    return;
+  }
   const n = cartItems().reduce((a, i) => a + i.qty, 0);
   $('#tabs').innerHTML = TABS.map(([k, t]) => `<button class="tab ${route === k || (route === 'admin' && k === 'profile') ? 'on' : ''}" data-go="${k}" aria-label="${t}">${svg(k)}${t}${k === 'cart' && n ? `<span class="cnt">${n}</span>` : ''}${k === 'favorites' && favs.length ? `<span class="cnt">${favs.length}</span>` : ''}</button>`).join('');
 }
@@ -727,12 +745,15 @@ function viewAdmin() {
   const low = DB.products.reduce((a, p) => a + p.colors.reduce((b, c) => b + p.sizes.filter(s => stockOf(p, c, s) <= 1).length, 0), 0);
   const pend = DB.reviews.filter(r => r.status === 'pending').length;
   const nw = DB.wishes.filter(w => w.status !== 'done').length;
-  const T = [['orders', 'Заказы'], ['stats', 'Статистика'], ['wishes', 'Ждут' + (nw ? ` (${nw})` : '')], ...(SB ? [['news', 'Рассылки']] : []), ['products', 'Товары'], ['stock', 'Остатки'], ['promo', 'Акции'], ['reviews', 'Отзывы' + (pend ? ` (${pend})` : '')], ['setup', 'Настройки']];
-  return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><h1>Панель магазина</h1><span style="display:flex;gap:8px">${SB ? '<button class="btn sm sec" id="reload">Обновить</button>' : ''}<button class="btn sm sec" id="logout">Выйти</button></span></div>
-  <div class="kpis"><div class="kpi"><span class="muted small">Заказы сегодня</span><b>${td.length}</b></div><div class="kpi"><span class="muted small">Выручка сегодня</span><b>${rub(td.reduce((a, o) => a + o.total, 0))}</b></div>
-  <div class="kpi"><span class="muted small">Ждут проверки оплаты</span><b>${DB.orders.filter(o => o.status === 'awaiting').length}</b></div><div class="kpi"><span class="muted small">Вариантов с остатком ≤ 1</span><b class="${low ? 'low' : ''}">${low}</b></div></div>
-  <div class="seg adm" style="margin:14px 0 16px">${T.map(([k, t]) => `<button class="${adm === k ? 'on' : ''}" data-adm="${k}">${t}</button>`).join('')}</div>
-  <div id="admBody">${({ orders: admOrders, products: admProducts, stock: admStock, promo: admPromo, reviews: admReviews, setup: admSetup, stats: admStats, wishes: admWishes, news: admNews })[adm]()}</div>`;
+  const grp = admGroupOf(adm), subs = ADM_GROUPS[grp].filter(k => SB || k !== 'news');
+  const lbl = k => ADM_SUB[k] + (k === 'wishes' && nw ? ` (${nw})` : k === 'reviews' && pend ? ` (${pend})` : '');
+  const awaiting = DB.orders.filter(o => o.status === 'awaiting').length;
+  return `<div class="admhead"><b>Панель</b>${SB ? '<button class="btn sm sec" id="reload">Обновить</button>' : ''}</div>
+  <div class="kpis mini"><div class="kpi"><span>Сегодня</span><b>${td.length}</b></div><div class="kpi"><span>Выручка</span><b>${rub(td.reduce((a, o) => a + o.total, 0))}</b></div>
+  <button class="kpi" data-admto="orders" data-of="awaiting"><span>К проверке</span><b class="${awaiting ? 'low' : ''}">${awaiting}</b></button><button class="kpi" data-admto="stock"><span>Остаток ≤ 1</span><b class="${low ? 'low' : ''}">${low}</b></button></div>
+  ${subs.length > 1 ? `<div class="seg" style="margin:12px 0 16px">${subs.map(k => `<button class="${adm === k ? 'on' : ''}" data-adm="${k}">${lbl(k)}</button>`).join('')}</div>` : '<div style="height:12px"></div>'}
+  <div id="admBody">${({ orders: admOrders, products: admProducts, stock: admStock, promo: admPromo, reviews: admReviews, setup: admSetup, stats: admStats, wishes: admWishes, news: admNews })[adm]()}</div>
+  ${grp === 'a_more' ? `<div class="list" style="margin-top:16px"><button class="row" style="width:100%;text-align:left" data-go="home"><span class="f">Открыть магазин как покупатель</span><span class="muted r">›</span></button><button class="row" style="width:100%;text-align:left" id="logout"><span class="f" style="color:var(--red)">Выйти из панели</span></button></div>` : ''}`;
 }
 function admOrders() {
   let l = [...DB.orders].reverse(); if (ordF !== 'all') l = l.filter(o => o.status === ordF);
@@ -1085,6 +1106,8 @@ document.addEventListener('click', e => {
   if (t.dataset.inst) return installAction(t.dataset.inst);
   if (t.dataset.contact !== undefined) return openContact(t.dataset.contact);
   if (t.dataset.returns) return openReturns();
+  if (t.dataset.admgo) { admLast[admGroupOf(adm)] = adm; const g = t.dataset.admgo; adm = admLast[g] || ADM_GROUPS[g][0]; admQ = ''; render(); window.scrollTo({ top: 0 }); return; }
+  if (t.dataset.admto) { adm = t.dataset.admto; admQ = ''; if (t.dataset.of) ordF = t.dataset.of; render(); window.scrollTo({ top: 0 }); return; }
   if (t.dataset.policy) return openPolicy();
   if (t.dataset.notify) return openNotify();
   if (t.dataset.consent) { if (t.dataset.consent === 'reset') { try { localStorage.removeItem(CONSENT); } catch {} toast('Выберите настройки cookie внизу экрана'); document.querySelectorAll('.sheetbg [data-close]').forEach(b => b.click()); return consentBanner(); } ls.set(CONSENT, t.dataset.consent); document.getElementById('cookie')?.remove(); if (t.dataset.consent === 'all') loadMetrika(); return; }
