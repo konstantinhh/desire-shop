@@ -1,5 +1,5 @@
 {
-const APP_VERSION = '2.4';
+const APP_VERSION = '2.4.1';
 /* ===== Хранилище: без config.js — в браузере (тест), с config.js — база Supabase на сервере ===== */
 const KEY = 'desire_db_v1', CK = 'desire_cart_v1', FK = 'desire_fav_v1', MK = 'desire_my_v1';
 const mem = {};
@@ -63,7 +63,23 @@ async function sbSync() {
   if (!synced) return;
   const now = snapOf(), ops = [];
   for (const t of ['products', 'promos', 'campaigns']) {
-    const up = DB[t].filter(x => now[t][x.id] !== synced[t][x.id]).map(x => ({ id: x.id, data: x }));
+    const changed = DB[t].filter(x => now[t][x.id] !== synced[t][x.id]);
+    // Отправляем только изменённые поля поверх свежей версии из базы — чтобы не затереть то,
+    // что за это время поменяли на сервере или с другого телефона (фото, параметры, остатки).
+    const up = await Promise.all(changed.map(async x => {
+      const old = synced[t][x.id] ? JSON.parse(synced[t][x.id]) : null;
+      if (!old) return { id: x.id, data: x };
+      const { data: row } = await SB.from(t).select('data').eq('id', x.id).maybeSingle();
+      if (!row) return { id: x.id, data: x };
+      const merged = { ...row.data };
+      for (const k of new Set([...Object.keys(old), ...Object.keys(x)])) {
+        if (JSON.stringify(old[k]) === JSON.stringify(x[k])) continue;
+        if (k === 'stock' && x.stock && old.stock) { merged.stock = { ...(row.data.stock || {}) }; for (const sk of new Set([...Object.keys(old.stock), ...Object.keys(x.stock)])) if (old.stock[sk] !== x.stock[sk]) { if (sk in x.stock) merged.stock[sk] = x.stock[sk]; else delete merged.stock[sk]; } }
+        else if (k in x) merged[k] = x[k]; else delete merged[k];
+      }
+      Object.assign(x, merged); for (const k of Object.keys(x)) if (!(k in merged)) delete x[k];
+      return { id: x.id, data: merged };
+    }));
     const del = Object.keys(synced[t]).filter(id => !(id in now[t]));
     if (up.length) ops.push(SB.from(t).upsert(up));
     if (del.length) ops.push(SB.from(t).delete().in('id', del));
@@ -72,7 +88,7 @@ async function sbSync() {
   for (const o of DB.orders) if (o.id in synced.orders && synced.orders[o.id] !== o.status) ops.push(SB.from('orders').update({ status: o.status }).eq('id', o.id));
   const res = await Promise.all(ops), bad = res.find(r => r.error);
   if (bad) { toast('Не сохранилось в базе: ' + (bad.error.message || 'ошибка')); return false; }
-  synced = now; return true;
+  synced = snapOf(); return true;
 }
 async function uploadPhoto(dataUrl) {
   const blob = await (await fetch(dataUrl)).blob(), path = Date.now() + '-' + uid() + '.jpg';
